@@ -1,3 +1,0 @@
-The next patch would create the file libavfilter/riscv/scene_sad_init.c,
-which already exists!  Skipping patch.
-patch: **** unexpected end of file in patch

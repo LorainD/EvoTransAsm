@@ -1,3 +1,0 @@
-The next patch would create the file libavfilter/riscv/Makefile,
-which already exists!  Skipping patch.
-1 out of 1 hunk ignored

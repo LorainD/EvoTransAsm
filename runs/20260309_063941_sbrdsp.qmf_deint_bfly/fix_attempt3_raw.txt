@@ -1,9 +1,0 @@
-{
-  "files": [],
-  "patches": [
-    {
-      "path": "libavcodec/riscv/Makefile",
-      "diff": "--- a/libavcodec/riscv/Makefile\n+++ b/libavcodec/riscv/Makefile\n@@ -1,8 +1,16 @@\n # riscv optimizations\n \n OBJS += riscv/aacpsdsp_init.o\n+\n+# When only the QMF deinterleave butterfly is enabled (e.g. sbrdsp.qmf_deint_bfly),\n+# FFmpeg's build may not select aacpsdsp_init.o (or it can be filtered out by the\n+# per-component build), but the object list for the arch directory can still end up\n+# referencing riscv/aacpsdsp.o.\n+#\n+# Ensure the expected object is actually built by aliasing it to the init TU.\n+OBJS += riscv/aacpsdsp.o\n+\n+riscv/aacpsdsp.o: riscv/aacpsdsp_init.o\n+\t$(CP) $< $@\n"
-    }
-  ]
-}

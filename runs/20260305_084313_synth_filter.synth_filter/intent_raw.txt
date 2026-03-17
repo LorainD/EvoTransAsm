@@ -1,5 +1,0 @@
-{
-  "action": "migrate",
-  "symbol": "synth_filter.synth_filter",
-  "notes": "用户明确请求迁移 FFmpeg 中的算子 synth_filter.synth_filter。"
-}

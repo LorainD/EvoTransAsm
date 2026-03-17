@@ -1,2 +1,0 @@
-patching file libavcodec/riscv/synth_filter_init.c
-patch: **** unexpected end of file in patch

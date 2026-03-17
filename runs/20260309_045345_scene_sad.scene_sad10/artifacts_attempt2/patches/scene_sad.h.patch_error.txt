@@ -1,2 +1,0 @@
-patching file src/libavfilter/scene_sad.h
-patch: **** unexpected end of file in patch

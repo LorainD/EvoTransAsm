@@ -1,5 +1,0 @@
-{
-  "action": "migrate",
-  "symbol": "h264pred.pred16x16",
-  "notes": "用户明确要求迁移算子 h264pred.pred16x16，并说明内部可能包含多个函数，希望先尝试部分迁移。"
-}

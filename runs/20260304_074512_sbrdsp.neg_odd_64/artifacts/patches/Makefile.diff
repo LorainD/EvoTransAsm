@@ -1,5 +1,0 @@
-*** TODO PATCH (only add if not already present in your tree) ***
---- a/libavcodec/riscv/Makefile
-+++ b/libavcodec/riscv/Makefile
-@@
-+OBJS-$(CONFIG_SBRDSP) += riscv/sbrdsp_rvv.o

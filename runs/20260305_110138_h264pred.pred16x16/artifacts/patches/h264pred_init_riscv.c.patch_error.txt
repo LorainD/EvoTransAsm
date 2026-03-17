@@ -1,2 +1,0 @@
-patching file libavcodec/riscv/h264pred_init_riscv.c
-patch: **** unexpected end of file in patch

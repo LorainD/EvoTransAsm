@@ -1,5 +1,0 @@
-*** TODO PATCH (most conservative, apply manually if paths/vars differ) ***
---- a/libavcodec/riscv/Makefile
-+++ b/libavcodec/riscv/Makefile
-@@
-+OBJS-$(CONFIG_SBRDSP) += riscv/sbrdsp_rvv.o

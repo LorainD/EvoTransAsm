@@ -1,2 +1,0 @@
-patch unexpectedly ends in middle of line
-patch: **** Only garbage was found in the patch input.

@@ -1,1 +1,0 @@
-                        sbrdsp_rvv.o \

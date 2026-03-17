@@ -1,5 +1,0 @@
-{
-  "action": "migrate",
-  "symbol": "h264pred.pred16x16",
-  "notes": "用户请求将 FFmpeg 库中的 H.264 预测算子 h264pred.pred16x16 迁移到 RISC-V Vector (RVV) 平台。"
-}
