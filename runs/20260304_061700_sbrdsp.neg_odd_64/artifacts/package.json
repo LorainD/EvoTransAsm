@@ -1,0 +1,18 @@
+{
+  "files": [
+    {
+      "path": "libavcodec/riscv/sbrdsp_rvv.S",
+      "content": "/*\n * RISC-V RVV optimized SBR DSP\n *\n * This file is a minimal, buildable stub for RVV.\n * Replace the scalar loop with a true RVV implementation.\n */\n\n#include \"libavutil/riscv/asm.S\"\n\n#if HAVE_RVV\n\n/*\n * void ff_sbr_neg_odd_64_rvv(float *x);\n * Negate odd-indexed elements in a 128-float buffer.\n */\nfunc ff_sbr_neg_odd_64_rvv\n    /* a0 = float *x */\n    /* Minimal correct scalar implementation (TODO: RVV vectorize). */\n    li      t0, 64\n1:\n    lw      t1, 4(a0)\n    neg     t1, t1\n    sw      t1, 4(a0)\n    addi    a0, a0, 8\n    addi    t0, t0, -1\n    bnez    t0, 1b\n    ret\nendfunc ff_sbr_neg_odd_64_rvv\n\n#endif /* HAVE_RVV */\n"
+    }
+  ],
+  "patches": [
+    {
+      "path": "libavcodec/riscv/sbrdsp_init.c",
+      "diff": "--- a/libavcodec/riscv/sbrdsp_init.c\n+++ b/libavcodec/riscv/sbrdsp_init.c\n@@ -1,3 +1,39 @@\n+/*\n+ * RISC-V SBR DSP init\n+ *\n+ * Minimal RVV hook for ff_sbr_neg_odd_64.\n+ */\n+\n+#include \"config.h\"\n+\n+#include \"libavcodec/sbrdsp.h\"\n+\n+void ff_sbrdsp_init_riscv(SBRDSPContext *s)\n+{\n+    /* TODO: if this file already has other init logic, merge accordingly. */\n+#if HAVE_RVV\n+    void ff_sbr_neg_odd_64_rvv(float *x);\n+    s->neg_odd_64 = ff_sbr_neg_odd_64_rvv;\n+#endif\n+}\n"
+    },
+    {
+      "path": "libavcodec/riscv/Makefile",
+      "diff": "--- a/libavcodec/riscv/Makefile\n+++ b/libavcodec/riscv/Makefile\n@@ -1,3 +1,8 @@\n+OBJS-$(CONFIG_SBRDSP)                 += riscv/sbrdsp_init.o\n+\n+RVV-OBJS-$(CONFIG_SBRDSP)             += riscv/sbrdsp_rvv.o\n+\n+# TODO: If this Makefile already defines RVV-OBJS / OBJS patterns, integrate these lines.\n"
+    }
+  ]
+}

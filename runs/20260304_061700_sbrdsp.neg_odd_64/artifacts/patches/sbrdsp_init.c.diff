@@ -1,0 +1,21 @@
+--- a/libavcodec/riscv/sbrdsp_init.c
++++ b/libavcodec/riscv/sbrdsp_init.c
+@@ -1,3 +1,39 @@
++/*
++ * RISC-V SBR DSP init
++ *
++ * Minimal RVV hook for ff_sbr_neg_odd_64.
++ */
++
++#include "config.h"
++
++#include "libavcodec/sbrdsp.h"
++
++void ff_sbrdsp_init_riscv(SBRDSPContext *s)
++{
++    /* TODO: if this file already has other init logic, merge accordingly. */
++#if HAVE_RVV
++    void ff_sbr_neg_odd_64_rvv(float *x);
++    s->neg_odd_64 = ff_sbr_neg_odd_64_rvv;
++#endif
++}

@@ -1,0 +1,3 @@
+patching file libavcodec/h264pred.h
+Reversed (or previously applied) patch detected!  Skipping patch.
+1 out of 1 hunk ignored

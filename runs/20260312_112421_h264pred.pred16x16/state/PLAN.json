@@ -1,0 +1,26 @@
+{
+  "steps": [
+    "在 FFmpeg 源码中定位符号 h264pred.pred16x16 的定义与调用路径：全局搜索 `pred16x16`、`h264_pred16x16`、`H264PredContext`、`ff_h264_pred_init`（如 `libavcodec/h264pred.c`、`libavcodec/h264pred.h`、`libavcodec/h264pred_template.c` 等）。确认该符号对应的是 H264PredContext 中 16x16 亮度帧内预测函数指针（通常为 `void (*pred16x16[...])(uint8_t *dst, ptrdiff_t stride, const uint8_t *top, const uint8_t *left)` 或同类签名），并记录：具体函数名、参数类型、像素格式（8-bit/10-bit）、以及在 init 中按 `bit_depth`/`codec_id`/`cpu_flags` 选择的条件。",
+    "定位并阅读 C 参考实现：打开 `libavcodec/h264pred.c`（以及可能的 template 文件）中对应的 16x16 模式实现（如 vertical/horizontal/DC/plane 等预测核），确认 pred16x16 最终会选择哪些 mode（0..3 或更多）并写入 16x16 块。把每个 mode 的关键计算流程整理成可向量化的数据流：写 16x16 = 16 行×16 列；常见模式为：Vertical（复制 top 16 字节到 16 行）、Horizontal（每行填充 left[y]）、DC（top/left 求和取平均并填充）、Plane（基于梯度计算每像素值并 clip）。明确是否需要 `av_clip_uint8`/`av_clip_pixel`、加法偏置与右移取整规则（H.264 规范中的 plane/DC 细节）。",
+    "定位 x86/ARM 参考优化实现用于对照：在 `libavcodec/x86/` 下搜索 `h264pred`、`pred16x16`、`ff_h264_pred_init_x86`（以及 `h264pred_init.c` / `.asm`），记录哪些模式被 SIMD 化、如何组织 load/store（例如一次处理 16 字节一行，或 16×2 行）。同样在 `libavcodec/arm/`、`libavcodec/aarch64/` 下搜索 `h264pred`、`pred16x16`、`ff_h264_pred_init_arm/aarch64` 与对应 NEON 汇编/内联。对照点：plane 模式的梯度/乘加、DC 求和的横向归约、clip 与 pack 的实现策略。",
+    "确定 RVV 目标范围与优先级：先实现收益最大且实现简单的模式（通常 Vertical、Horizontal、DC），再实现 Plane。若 FFmpeg 中 pred16x16 是“数组指针按模式索引”，则 RVV 实现可以仅覆盖若干 mode：例如 `pred16x16_vertical_rvv`、`pred16x16_horizontal_rvv`、`pred16x16_dc_rvv`、`pred16x16_plane_rvv`，并在 init 时按 cpu flag 选择替换对应条目。",
+    "为 RVV 选择落点文件与接口：新增 `libavcodec/riscv/h264pred_rvv.c`（或遵循项目已有 riscv 组织方式，如 `libavcodec/riscv/h264pred_init_riscv.c` + `h264pred_rvv.c`）。在头文件侧确保能访问 H264PredContext 与 init 函数声明（通常通过包含 `h264pred.h`）。为每个要替换的模式提供与 C 实现完全一致的函数签名与可见性（通常 `static void` + 由 init 赋值，或 `void ff_h264_pred16x16_*_rvv(...)`）。",
+    "实现 pred16x16 Vertical（RVV）：逻辑是把 `top[0..15]` 复制到 dst 的 16 行。RVV 做法：设置 `vl=16`，`vle8` 载入 top 到向量寄存器；循环 16 次对每行 `vse8` 存储到 `dst + y*stride`。若希望减少循环开销，可一次写两行或四行（仍然用同一个向量重复 store）。确保 stride 为 ptrdiff_t，地址计算用 `uint8_t* row = dst + y*stride`。",
+    "实现 pred16x16 Horizontal（RVV）：每行填充一个标量 `left[y]` 到 16 列。RVV 做法：对 y=0..15：`uint8_t v = left[y]`；用 `vmv.v.x` 广播到向量（`vl=16`），然后 `vse8` 写一行。可展开循环（例如每次处理 4 行），但优先保证正确性与清晰性。",
+    "实现 pred16x16 DC（RVV）：按 C 规则计算 DC 值（通常为 (sum(top)+sum(left)+16)>>5 或类似，取决于是否可用 top/left）。先严格复刻 C 参考实现对可用性（边界条件）与偏置/移位：如果 pred16x16 的该 mode 在函数入口已经保证 top/left 可用，则直接求和；否则按 C 的条件分支实现。RVV 求和策略：`vl=16`，`vle8` 加载 top 与 left；用 `vwaddu.vx` 扩展到 16-bit/32-bit 后做向量加；用 `vredsum` 做水平归约得到 sumTop 与 sumLeft（注意归约初值为 0、目标类型足够大，最终转回 int）。计算 dcVal（int），再 `vmv.v.x` 广播为 u8（需要确保范围 0..255，通常本身已在 0..255），`vse8` 写 16 行。",
+    "实现 pred16x16 Plane（RVV）：先逐字对照 C 代码确认 H/V 梯度的计算方式（常见为对 top[8+i]-top[6-i] 与 left[8+i]-left[6-i] 加权求和，得到 H/V，再算 a/b/c，最后每像素 `((a + b*(x-7) + c*(y-7) + 16) >> 5)` 并 clip）。实现策略：标量部分（H、V、a、b、c 的计算）可先保持标量以降低复杂度；向量化像素生成与写回：对每行 y=0..15，构造 x 向量 [0..15]（用 `vid.v` 生成索引），计算 `x-7` 与 `y-7`（y 为标量），用 `vmul`/`vadd` 在 32-bit 中计算预测值；加偏置、右移；clip 到 0..255（用 `vmin`/`vmax` 或饱和收窄指令序列），最后 pack 到 u8 并 `vse8` 写回。注意：RVV 的右移与收窄需选择合适指令组合（例如在 32-bit 做算术右移，然后 clamp，再转 u8）。优先保证与 C 的 rounding/clip 完全一致。",
+    "对齐 FFmpeg CPU flag 与 init 路径（集成到运行时派发）：定位 `ff_h264_pred_init` 以及 riscv 架构的 init 文件（如已存在 `libavcodec/riscv/` 的 init 入口）。新增 `ff_h264_pred_init_riscv(H264PredContext *h, int codec_id, int bit_depth, const int chroma_format_idc)` 或遵循现有命名，内部检测 `av_get_cpu_flags()` 是否包含 RVV（通常为 `AV_CPU_FLAG_RVV` 或 riscv 专用 flag，依 FFmpeg 版本而定），并在满足条件时将 `h->pred16x16[VERT] = pred16x16_vertical_rvv` 等替换相应 mode。若 pred16x16 是单一入口（非数组），则直接替换该函数指针；若按 bit depth 区分（8/10/12），则只对 8-bit 路径启用，或另行实现 high bit depth 版本。",
+    "集成到构建系统：在 `libavcodec/riscv/Makefile`（或对应目录的 makefile）中添加 `OBJS-$(CONFIG_H264PRED) += riscv/h264pred_rvv.o`（文件名按实际），并在 `libavcodec/riscv/Makefile`/`configure` 的条件中用 `HAVE_RVV` 或 `HAVE_RISCVV` 宏控制编译。若 FFmpeg 需要在 `configure` 中探测 RVV，确认已有 `--enable-rvv` 或通过 `check_cflags -march=rv64gcv` 等设置；必要时为该文件添加 `CFLAGS`（例如 `-march=rv64gcv -mabi=lp64d`）遵循项目既有做法，避免污染全局。",
+    "补充必要的头文件与宏：在 RVV 源文件中包含 `<riscv_vector.h>`，并使用 FFmpeg 提供的属性宏（如 `av_always_inline`、`av_unused`）与 `ptrdiff_t`。确保函数在非 RVV 编译条件下不会被编译（用 `#if HAVE_RVV` 或 `#if defined(__riscv_vector)` 包裹），并在 init 中同样用对应宏保护。",
+    "本地功能正确性验证（非 checkasm）：先用单元测试/解码回归：编译带 RVV 的 ffmpeg，跑一组 H.264 样本解码并与未启用 RVV 版本输出对比（PSNR/MD5）：例如 `ffmpeg -i in.h264 -f md5 -`。确保在边界块（靠近图像边缘）不会崩溃且结果一致；特别检查 plane/DC 的 rounding 与 clip。",
+    "运行 checkasm 验证：确认 FFmpeg 的 checkasm 覆盖 h264pred（通常在 `tests/checkasm/h264pred.c` 或类似文件）。若已有对 pred16x16 的测试入口，确保 init 能注册 RVV 实现后被 checkasm 枚举到；若没有覆盖 pred16x16，需要在对应 checkasm 文件中新增针对 `H264PredContext` 的测试：构造随机 top/left/dst、调用 C 与 RVV 版本对比 16x16 输出，覆盖所有启用的 modes，并做多轮随机测试与边界值（0、255、渐变）。执行：`make V=1 checkasm` 或 `./tests/checkasm/checkasm --test=h264pred`（按工程习惯）。在 RISC-V RVV 机器/模拟器上运行，并确保 `--enable-riscv --enable-rvv` 等配置生效。",
+    "性能与回归：用 `bench`/自定义基准对 pred16x16（尤其 vertical/horizontal/DC/plane）测吞吐，确认没有因频繁设置 VL 或过多标量循环导致退化；可将 VL 固定为 16（e8m1）并尽量复用向量寄存器。最后跑 FATE（如可用）或至少解码回归集，确保无输出差异与无崩溃。"
+  ],
+  "function_order": [
+    "h264pred.pred16x16"
+  ],
+  "acceptance_criteria": {
+    "build_ok": true
+  },
+  "refine_history": []
+}

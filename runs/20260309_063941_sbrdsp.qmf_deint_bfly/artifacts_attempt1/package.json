@@ -1,0 +1,9 @@
+{
+  "files": [
+    {
+      "path": "libavcodec/riscv/Makefile",
+      "content": "#\n# This file is part of FFmpeg.\n#\n# Fix: GNU make requires recipe lines to start with a TAB character,\n# not spaces. This Makefile intentionally contains no recipe lines;\n# it only declares object lists for the riscv subdir.\n#\n\n# RISC-V optimized objects\nOBJS-$(CONFIG_RV34DSP)                  += riscv/rv34dsp.o\nOBJS-$(CONFIG_RV40DSP)                  += riscv/rv40dsp.o\n\nOBJS-$(CONFIG_HEVC_DECODER)             += riscv/hevc_dsp.o\nOBJS-$(CONFIG_H264DSP)                  += riscv/h264dsp.o\n\nOBJS-$(CONFIG_AAC_DECODER)              += riscv/aacpsdsp.o\nOBJS-$(CONFIG_SBRDSP)                   += riscv/sbrdsp.o\n\nOBJS-$(CONFIG_VP8DSP)                   += riscv/vp8dsp.o\nOBJS-$(CONFIG_VP9DSP)                   += riscv/vp9dsp.o\n"
+    }
+  ],
+  "patches": []
+}

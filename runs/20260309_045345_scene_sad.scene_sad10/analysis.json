@@ -1,0 +1,25 @@
+{
+  "symbol": "scene_sad.scene_sad10",
+  "datatype": "uint16",
+  "vectorizable": true,
+  "pattern": [
+    "stride_load",
+    "horizontal_add",
+    "tail"
+  ],
+  "has_stride": true,
+  "has_saturation": false,
+  "reduction": true,
+  "tail_required": true,
+  "math_expression": "sad = 0; for y in [0..height-1]: for x in [0..width-1]: sad += abs((uint16)src1[y*stride1/2 + x] - (uint16)src2[y*stride2/2 + x]); *sum = sad",
+  "c_candidates": [
+    "libavfilter/scene_sad.c:ff_scene_sad16_c (used for >8bpc; core SAD loop over uint16 with stride)",
+    "libavfilter/scene_sad.c:ff_scene_sad_c (called as scalar tail by x86 init wrapper; same SAD math for 8bpc/byte path)"
+  ],
+  "x86_refs": [
+    "libavfilter/x86/scene_sad.asm:cglobal scene_sad%1 (macro SAD_INIT defines SIMD SAD kernel entrypoints, includes 10-bit variant via depth parameter)",
+    "libavfilter/x86/scene_sad_init.c:SCENE_SAD16_FUNC (declares ASM SAD16 functions and binds them; wrapper pattern for reduction + tail)"
+  ],
+  "arm_refs": [],
+  "notes": "scene_sad10 corresponds to 10-bit video => pixels stored as 16-bit (uint16) in src buffers; SAD accumulates into uint64. Vectorization: load vectors of uint16 from src1/src2, compute abs diff (via widening to signed/unsigned, subtract, abs), accumulate in wider lanes (u32/u64), then horizontal add to scalar. Strides are in bytes in API; for 16-bit path they are effectively /2 elements. Width may be not multiple of VL, so tail handling is required (RVV vsetvl loop). No saturation required (use uint64 accumulator). No ARM NEON reference present in provided context."
+}

@@ -1,0 +1,4 @@
+*** a/libavcodec/riscv/Makefile
+--- b/libavcodec/riscv/Makefile
+@@
++OBJS-$(CONFIG_DCA_DECODER)                 += riscv/synth_filter_rvv.o

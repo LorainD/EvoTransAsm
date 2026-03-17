@@ -1,0 +1,7 @@
+```json
+{
+  "action": "migrate",
+  "symbol": "sbrdsp_qmf_deint_neg",
+  "notes": "用户明确要求迁移 FFmpeg 中的 sbrdsp.qmf_deint_neg 算子到 RVV"
+}
+```

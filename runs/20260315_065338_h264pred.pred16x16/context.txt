@@ -1,0 +1,755 @@
+--- libavcodec/h264pred.c (2 function(s) containing 'pred16x16') ---
+   33: #include "h264pred.h"
+   34: #include "mathops.h"
+   35: 
+   36: #define BIT_DEPTH 8
+   37: #include "h264pred_template.c"
+   38: #undef BIT_DEPTH
+   39: 
+   40: #define BIT_DEPTH 9
+   41: #include "h264pred_template.c"
+   42: #undef BIT_DEPTH
+   43: 
+   44: #define BIT_DEPTH 10
+   45: #include "h264pred_template.c"
+   46: #undef BIT_DEPTH
+   47: 
+   48: #define BIT_DEPTH 12
+   49: #include "h264pred_template.c"
+   50: #undef BIT_DEPTH
+   51: 
+   52: #define BIT_DEPTH 14
+   53: #include "h264pred_template.c"
+   54: #undef BIT_DEPTH
+   55: 
+   56: static void pred4x4_127_dc_c(uint8_t *src, const uint8_t *topright,
+   57:                              ptrdiff_t _stride)
+   58: {
+   59:     int stride = _stride;
+   60:     const uint32_t a = 0x7F7F7F7FU;
+   61: 
+   62:     AV_WN32A(src + 0 * stride, a);
+   63:     AV_WN32A(src + 1 * stride, a);
+   64:     AV_WN32A(src + 2 * stride, a);
+   65:     AV_WN32A(src + 3 * stride, a);
+   66: }
+
+  437: av_cold void ff_h264_pred_init(H264PredContext *h, int codec_id,
+  438:                                const int bit_depth,
+  439:                                int chroma_format_idc)
+  440: {
+  441: #undef FUNC
+  442: #undef FUNCC
+  443: #define FUNC(a, depth) a ## _ ## depth
+  444: #define FUNCC(a, depth) a ## _ ## depth ## _c
+  445: #define FUNCD(a) a ## _c
+  446: 
+  447: #define H264_PRED(depth) \
+  448:     h->pred4x4[VERT_PRED           ] = FUNCC(pred4x4_vertical,        depth);\
+  449:     h->pred4x4[HOR_PRED            ] = FUNCC(pred4x4_horizontal,      depth);\
+  450:     h->pred4x4[DC_PRED             ] = FUNCC(pred4x4_dc,              depth);\
+  451:     h->pred4x4[DIAG_DOWN_LEFT_PRED ] = FUNCC(pred4x4_down_left,       depth);\
+  452:     h->pred4x4[DIAG_DOWN_RIGHT_PRED] = FUNCC(pred4x4_down_right,      depth);\
+  453:     h->pred4x4[VERT_RIGHT_PRED     ] = FUNCC(pred4x4_vertical_right,  depth);\
+  454:     h->pred4x4[HOR_DOWN_PRED       ] = FUNCC(pred4x4_horizontal_down, depth);\
+  455:     h->pred4x4[VERT_LEFT_PRED      ] = FUNCC(pred4x4_vertical_left,   depth);\
+  456:     h->pred4x4[HOR_UP_PRED         ] = FUNCC(pred4x4_horizontal_up,   depth);\
+  457:     h->pred4x4[LEFT_DC_PRED        ] = FUNCC(pred4x4_left_dc,         depth);\
+  458:     h->pred4x4[TOP_DC_PRED         ] = FUNCC(pred4x4_top_dc,          depth);\
+  459:     if (depth > 8 || codec_id != AV_CODEC_ID_VP8)\
+  460:         h->pred4x4[DC_128_PRED     ] = FUNCC(pred4x4_128_dc,          depth);\
+  461: \
+  462:     h->pred8x8l[VERT_PRED           ]= FUNCC(pred8x8l_vertical            , depth);\
+  463:     h->pred8x8l[HOR_PRED            ]= FUNCC(pred8x8l_horizontal          , depth);\
+  464:     h->pred8x8l[DC_PRED             ]= FUNCC(pred8x8l_dc                  , depth);\
+  465:     h->pred8x8l[DIAG_DOWN_LEFT_PRED ]= FUNCC(pred8x8l_down_left           , depth);\
+  466:     h->pred8x8l[DIAG_DOWN_RIGHT_PRED]= FUNCC(pred8x8l_down_right          , depth);\
+  467:     h->pred8x8l[VERT_RIGHT_PRED     ]= FUNCC(pred8x8l_vertical_right      , depth);\
+  468:     h->pred8x8l[HOR_DOWN_PRED       ]= FUNCC(pred8x8l_horizontal_down     , depth);\
+  469:     h->pred8x8l[VERT_LEFT_PRED      ]= FUNCC(pred8x8l_vertical_left       , depth);\
+  470:     h->pred8x8l[HOR_UP_PRED         ]= FUNCC(pred8x8l_horizontal_up       , depth);\
+  471:     h->pred8x8l[LEFT_DC_PRED        ]= FUNCC(pred8x8l_left_dc             , depth);\
+  472:     h->pred8x8l[TOP_DC_PRED         ]= FUNCC(pred8x8l_top_dc              , depth);\
+  473:     h->pred8x8l[DC_128_PRED         ]= FUNCC(pred8x8l_128_dc              , depth);\
+  474: \
+  475:     if (chroma_format_idc <= 1) {\
+  476:         h->pred8x8[VERT_PRED8x8   ]= FUNCC(pred8x8_vertical               , depth);\
+  477:         h->pred8x8[HOR_PRED8x8    ]= FUNCC(pred8x8_horizontal             , depth);\
+  478:         h->pred8x8[PLANE_PRED8x8] = FUNCC(pred8x8_plane,       depth);\
+  479:     } else {\
+  480:         h->pred8x8[VERT_PRED8x8   ]= FUNCC(pred8x16_vertical              , depth);\
+  481:         h->pred8x8[HOR_PRED8x8    ]= FUNCC(pred8x16_horizontal            , depth);\
+  482:         h->pred8x8[PLANE_PRED8x8] = FUNCC(pred8x16_plane,      depth);\
+  483:     }\
+  484:     if (depth > 8 || (codec_id != AV_CODEC_ID_RV40 && \
+  485:                       codec_id != AV_CODEC_ID_VP7  && \
+  486:                       codec_id != AV_CODEC_ID_VP8)) { \
+  487:         if (chroma_format_idc <= 1) {\
+  488:             h->pred8x8[DC_PRED8x8     ]= FUNCC(pred8x8_dc                     , depth);\
+  489:             h->pred8x8[LEFT_DC_PRED8x8]= FUNCC(pred8x8_left_dc                , depth);\
+  490:             h->pred8x8[TOP_DC_PRED8x8 ]= FUNCC(pred8x8_top_dc                 , depth);\
+  491:             h->pred8x8[ALZHEIMER_DC_L0T_PRED8x8 ]= FUNC(pred8x8_mad_cow_dc_l0t, depth);\
+  492:             h->pred8x8[ALZHEIMER_DC_0LT_PRED8x8 ]= FUNC(pred8x8_mad_cow_dc_0lt, depth);\
+  493:             h->pred8x8[ALZHEIMER_DC_L00_PRED8x8 ]= FUNC(pred8x8_mad_cow_dc_l00, depth);\
+  494:             h->pred8x8[ALZHEIMER_DC_0L0_PRED8x8 ]= FUNC(pred8x8_mad_cow_dc_0l0, depth);\
+  495:         } else {\
+  496:             h->pred8x8[DC_PRED8x8     ]= FUNCC(pred8x16_dc                    , depth);\
+  497:             h->pred8x8[LEFT_DC_PRED8x8]= FUNCC(pred8x16_left_dc               , depth);\
+  498:             h->pred8x8[TOP_DC_PRED8x8 ]= FUNCC(pred8x16_top_dc                , depth);\
+  499:             h->pred8x8[ALZHEIMER_DC_L0T_PRED8x8 ]= FUNC(pred8x16_mad_cow_dc_l0t, depth);\
+  500:             h->pred8x8[ALZHEIMER_DC_0LT_PRED8x8 ]= FUNC(pred8x16_mad_cow_dc_0lt, depth);\
+  501:             h->pred8x8[ALZHEIMER_DC_L00_PRED8x8 ]= FUNC(pred8x16_mad_cow_dc_l00, depth);\
+  502:             h->pred8x8[ALZHEIMER_DC_0L0_PRED8x8 ]= FUNC(pred8x16_mad_cow_dc_0l0, depth);\
+  503:         }\
+  504:     }else{\
+  505:         h->pred8x8[DC_PRED8x8     ]= FUNCD(pred8x8_dc_rv40);\
+  506:         h->pred8x8[LEFT_DC_PRED8x8]= FUNCD(pred8x8_left_dc_rv40);\
+  507:         h->pred8x8[TOP_DC_PRED8x8 ]= FUNCD(pred8x8_top_dc_rv40);\
+  508:     }\
+  509:     if (chroma_format_idc <= 1) {\
+  510:         h->pred8x8[DC_128_PRED8x8 ]= FUNCC(pred8x8_128_dc                 , depth);\
+  511:     } else {\
+  512:         h->pred8x8[DC_128_PRED8x8 ]= FUNCC(pred8x16_128_dc                , depth);\
+  513:     }\
+  514: \
+  515:     h->pred16x16[DC_PRED8x8     ]= FUNCC(pred16x16_dc                     , depth);\
+  516:     h->pred16x16[VERT_PRED8x8   ]= FUNCC(pred16x16_vertical               , depth);\
+  517:     h->pred16x16[HOR_PRED8x8    ]= FUNCC(pred16x16_horizontal             , depth);\
+  518:     h->pred16x16[PLANE_PRED8x8  ]= FUNCC(pred16x16_plane                  , depth);\
+  519:     h->pred16x16[LEFT_DC_PRED8x8]= FUNCC(pred16x16_left_dc                , depth);\
+  520:     h->pred16x16[TOP_DC_PRED8x8 ]= FUNCC(pred16x16_top_dc                 , depth);\
+  521:     h->pred16x16[DC_128_PRED8x8 ]= FUNCC(pred16x16_128_dc                 , depth);\
+  522: \
+  523:     /* special lossless h/v prediction for H.264 */ \
+  524:     h->pred4x4_add  [VERT_PRED   ]= FUNCC(pred4x4_vertical_add            , depth);\
+  525:     h->pred4x4_add  [ HOR_PRED   ]= FUNCC(pred4x4_horizontal_add          , depth);\
+  526:     h->pred8x8l_add [VERT_PRED   ]= FUNCC(pred8x8l_vertical_add           , depth);\
+  527:     h->pred8x8l_add [ HOR_PRED   ]= FUNCC(pred8x8l_horizontal_add         , depth);\
+  528:     h->pred8x8l_filter_add [VERT_PRED   ]= FUNCC(pred8x8l_vertical_filter_add           , depth);\
+  529:     h->pred8x8l_filter_add [ HOR_PRED   ]= FUNCC(pred8x8l_horizontal_filter_add         , depth);\
+  530:     if (chroma_format_idc <= 1) {\
+  531:         h->pred8x8_add[VERT_PRED8x8] = FUNCC(pred8x8_vertical_add,    depth);\
+  532:         h->pred8x8_add[ HOR_PRED8x8] = FUNCC(pred8x8_horizontal_add,  depth);\
+  533:     } else {\
+  534:         h->pred8x8_add  [VERT_PRED8x8]= FUNCC(pred8x16_vertical_add            , depth);\
+  535:         h->pred8x8_add  [ HOR_PRED8x8]= FUNCC(pred8x16_horizontal_add          , depth);\
+  536:     }\
+  537:     h->pred16x16_add[VERT_PRED8x8]= FUNCC(pred16x16_vertical_add          , depth);\
+  538:     h->pred16x16_add[ HOR_PRED8x8]= FUNCC(pred16x16_horizontal_add        , depth);\
+  539: 
+  540:     switch (bit_depth) {
+  541:         case 9:
+  542:             H264_PRED(9)
+  543:             break;
+  544:         case 10:
+  545:             H264_PRED(10)
+  546:             break;
+  547:         case 12:
+  548:             H264_PRED(12)
+  549:             break;
+  550:         case 14:
+  551:             H264_PRED(14)
+  552:             break;
+  553:         default:
+  554:             av_assert0(bit_depth<=8);
+  555:             H264_PRED(8)
+  556:             switch (codec_id) {
+  557:             case AV_CODEC_ID_SVQ3:
+  558:                 h->pred4x4[DIAG_DOWN_LEFT_PRED] = FUNCD(pred4x4_down_left_svq3);
+  559:                 h->pred16x16[PLANE_PRED8x8    ] = FUNCD(pred16x16_plane_svq3);
+  560:                 break;
+  561:             case AV_CODEC_ID_RV40:
+  562:                 h->pred4x4[DIAG_DOWN_LEFT_PRED] = FUNCD(pred4x4_down_left_rv40);
+  563:                 h->pred4x4[VERT_LEFT_PRED     ] = FUNCD(pred4x4_vertical_left_rv40);
+  564:                 h->pred4x4[HOR_UP_PRED        ] = FUNCD(pred4x4_horizontal_up_rv40);
+  565:                 h->pred4x4[DIAG_DOWN_LEFT_PRED_RV40_NODOWN] = FUNCD(pred4x4_down_left_rv40_nodown);
+  566:                 h->pred4x4[HOR_UP_PRED_RV40_NODOWN] = FUNCD(pred4x4_horizontal_up_rv40_nodown);
+  567:                 h->pred4x4[VERT_LEFT_PRED_RV40_NODOWN] = FUNCD(pred4x4_vertical_left_rv40_nodown);
+  568:                 h->pred16x16[PLANE_PRED8x8    ] = FUNCD(pred16x16_plane_rv40);
+  569:                 break;
+  570:             case AV_CODEC_ID_VP7:
+  571:             case AV_CODEC_ID_VP8:
+  572:                 h->pred4x4[VERT_PRED       ] = FUNCD(pred4x4_vertical_vp8);
+  573:                 h->pred4x4[HOR_PRED        ] = FUNCD(pred4x4_horizontal_vp8);
+  574:                 h->pred4x4[VERT_LEFT_PRED  ] = FUNCD(pred4x4_vertical_left_vp8);
+  575:                 h->pred4x4[TM_VP8_PRED     ] = FUNCD(pred4x4_tm_vp8);
+  576:                 h->pred4x4[VERT_VP8_PRED   ] = FUNCC(pred4x4_vertical, 8);
+  577:                 h->pred4x4[DC_127_PRED     ] = FUNCD(pred4x4_127_dc);
+  578:                 h->pred4x4[DC_129_PRED     ] = FUNCD(pred4x4_129_dc);
+  579:                 h->pred4x4[HOR_VP8_PRED    ] = FUNCC(pred4x4_horizontal, 8);
+  580:                 h->pred8x8[PLANE_PRED8x8   ] = FUNCD(pred8x8_tm_vp8);
+  581:                 h->pred8x8[DC_127_PRED8x8  ] = FUNCC(pred8x8_127_dc, 8);
+  582:                 h->pred8x8[DC_129_PRED8x8  ] = FUNCC(pred8x8_129_dc, 8);
+  583:                 h->pred16x16[PLANE_PRED8x8 ] = FUNCD(pred16x16_tm_vp8);
+  584:                 h->pred16x16[DC_127_PRED8x8] = FUNCC(pred16x16_127_dc, 8);
+  585:                 h->pred16x16[DC_129_PRED8x8] = FUNCC(pred16x16_129_dc, 8);
+  586:                 break;
+  587:             }
+  588:             break;
+  589:     }
+  590: 
+  591: #if ARCH_AARCH64
+  592:     ff_h264_pred_init_aarch64(h, codec_id, bit_depth, chroma_format_idc);
+  593: #elif ARCH_ARM
+  594:     ff_h264_pred_init_arm(h, codec_id, bit_depth, chroma_format_idc);
+  595: #elif ARCH_X86
+  596:     ff_h264_pred_init_x86(h, codec_id, bit_depth, chroma_format_idc);
+  597: #elif ARCH_MIPS
+  598:     ff_h264_pred_init_mips(h, codec_id, bit_depth, chroma_format_idc);
+  599: #elif ARCH_LOONGARCH
+  600:     ff_h264_pred_init_loongarch(h, codec_id, bit_depth, chroma_format_idc);
+  601: #endif
+  602: }
+
+--- libavcodec/h264_parse.c (1 function(s) containing 'pred16x16') ---
+   24: #include "h264pred.h"
+   25: #include "h264_parse.h"
+   26: #include "h264_ps.h"
+   27: #include "h2645_parse.h"
+   28: #include "mpegutils.h"
+   29: 
+   30: int ff_h264_pred_weight_table(GetBitContext *gb, const SPS *sps,
+   31:                               const int *ref_count, int slice_type_nos,
+   32:                               H264PredWeightTable *pwt,
+   33:                               int picture_structure, void *logctx)
+   34: {
+   35:     int list, i, j;
+   36:     int luma_def, chroma_def;
+   37: 
+   38:     pwt->use_weight             = 0;
+   39:     pwt->use_weight_chroma      = 0;
+   40: 
+   41:     pwt->luma_log2_weight_denom = get_ue_golomb_31(gb);
+   42:     if (pwt->luma_log2_weight_denom > 7U) {
+   43:         av_log(logctx, AV_LOG_ERROR, "luma_log2_weight_denom %d is out of range\n", pwt->luma_log2_weight_denom);
+   44:         pwt->luma_log2_weight_denom = 0;
+   45:     }
+   46:     luma_def = 1 << pwt->luma_log2_weight_denom;
+   47: 
+   48:     if (sps->chroma_format_idc) {
+   49:         pwt->chroma_log2_weight_denom = get_ue_golomb_31(gb);
+   50:         if (pwt->chroma_log2_weight_denom > 7U) {
+   51:             av_log(logctx, AV_LOG_ERROR, "chroma_log2_weight_denom %d is out of range\n", pwt->chroma_log2_weight_denom);
+   52:             pwt->chroma_log2_weight_denom = 0;
+   53:         }
+   54:         chroma_def = 1 << pwt->chroma_log2_weight_denom;
+   55:     }
+   56: 
+   57:     for (list = 0; list < 2; list++) {
+   58:         pwt->luma_weight_flag[list]   = 0;
+   59:         pwt->chroma_weight_flag[list] = 0;
+   60:         for (i = 0; i < ref_count[list]; i++) {
+   61:             int luma_weight_flag, chroma_weight_flag;
+   62: 
+   63:             luma_weight_flag = get_bits1(gb);
+   64:             if (luma_weight_flag) {
+   65:                 pwt->luma_weight[i][list][0] = get_se_golomb(gb);
+   66:                 pwt->luma_weight[i][list][1] = get_se_golomb(gb);
+   67:                 if ((int8_t)pwt->luma_weight[i][list][0] != pwt->luma_weight[i][list][0] ||
+   68:                     (int8_t)pwt->luma_weight[i][list][1] != pwt->luma_weight[i][list][1])
+   69:                     goto out_range_weight;
+   70:                 if (pwt->luma_weight[i][list][0] != luma_def ||
+   71:                     pwt->luma_weight[i][list][1] != 0) {
+   72:                     pwt->use_weight             = 1;
+   73:                     pwt->luma_weight_flag[list] = 1;
+   74:                 }
+   75:             } else {
+   76:                 pwt->luma_weight[i][list][0] = luma_def;
+   77:                 pwt->luma_weight[i][list][1] = 0;
+   78:             }
+   79: 
+   80:             if (sps->chroma_format_idc) {
+   81:                 chroma_weight_flag = get_bits1(gb);
+   82:                 if (chroma_weight_flag) {
+   83:                     int j;
+   84:                     for (j = 0; j < 2; j++) {
+   85:                         pwt->chroma_weight[i][list][j][0] = get_se_golomb(gb);
+   86:                         pwt->chroma_weight[i][list][j][1] = get_se_golomb(gb);
+   87:                         if ((int8_t)pwt->chroma_weight[i][list][j][0] != pwt->chroma_weight[i][list][j][0] ||
+   88:                             (int8_t)pwt->chroma_weight[i][list][j][1] != pwt->chroma_weight[i][list][j][1]) {
+   89:                             pwt->chroma_weight[i][list][j][0] = chroma_def;
+   90:                             pwt->chroma_weight[i][list][j][1] = 0;
+   91:                             goto out_range_weight;
+   92:                         }
+   93:                         if (pwt->chroma_weight[i][list][j][0] != chroma_def ||
+   94:                             pwt->chroma_weight[i][list][j][1] != 0) {
+   95:                             pwt->use_weight_chroma        = 1;
+   96:                             pwt->chroma_weight_flag[list] = 1;
+   97:                         }
+   98:                     }
+   99:                 } else {
+  100:                     int j;
+  101:                     for (j = 0; j < 2; j++) {
+  102:                         pwt->chroma_weight[i][list][j][0] = chroma_def;
+  103:                         pwt->chroma_weight[i][list][j][1] = 0;
+  104:                     }
+  105:                 }
+  106:             }
+  107: 
+  108:             // for MBAFF
+  109:             if (picture_structure == PICT_FRAME) {
+  110:                 pwt->luma_weight[16 + 2 * i][list][0] = pwt->luma_weight[16 + 2 * i + 1][list][0] = pwt->luma_weight[i][list][0];
+  111:                 pwt->luma_weight[16 + 2 * i][list][1] = pwt->luma_weight[16 + 2 * i + 1][list][1] = pwt->luma_weight[i][list][1];
+  112:                 if (sps->chroma_format_idc) {
+  113:                     for (j = 0; j < 2; j++) {
+  114:                         pwt->chroma_weight[16 + 2 * i][list][j][0] = pwt->chroma_weight[16 + 2 * i + 1][list][j][0] = pwt->chroma_weight[i][list][j][0];
+  115:                         pwt->chroma_weight[16 + 2 * i][list][j][1] = pwt->chroma_weight[16 + 2 * i + 1][list][j][1] = pwt->chroma_weight[i][list][j][1];
+  116:                     }
+  117:                 }
+  118:             }
+  119:         }
+  120:         if (slice_type_nos != AV_PICTURE_TYPE_B)
+  121:             break;
+  122:     }
+  123:     pwt->use_weight = pwt->use_weight || pwt->use_weight_chroma;
+  124:     return 0;
+  125: out_range_weight:
+  126:     avpriv_request_sample(logctx, "Out of range weight");
+  127:     return AVERROR_INVALIDDATA;
+  128: }
+
+--- libavcodec/svq3.c (2 function(s) containing 'pred16x16') ---
+   56: #include "h264pred.h"
+   57: #include "h264_parse.h"
+   58: #include "golomb.h"
+   59: #include "hpeldsp.h"
+   60: #include "mathops.h"
+   61: #include "rectangle.h"
+   62: #include "tpeldsp.h"
+   63: #include "videodsp.h"
+   64: 
+   65: #if CONFIG_ZLIB
+   66: #include <zlib.h>
+   67: #endif
+   68: 
+   69: /**
+   70:  * @file
+   71:  * svq3 decoder.
+   72:  */
+   73: 
+   74: #define NUM_PICS 3
+   75: 
+   76: typedef struct SVQ3Frame {
+   77:     AVFrame *f;
+   78: 
+   79:     int16_t (*motion_val[2])[2];
+   80: 
+   81:     uint32_t *mb_type;
+   82: } SVQ3Frame;
+
+  657:                 svq3_add_idct_c(ptr, s->mb + i * 16, linesize, qscale, 0);
+  658:             }
+  659:         }
+  660:     } else {
+  661:         s->hpc.pred16x16[s->intra16x16_pred_mode](dest_y, linesize);
+  662:         svq3_luma_dc_dequant_idct_c(s->mb, s->mb_luma_dc[0], qscale);
+  663:     }
+  664: }
+  665: 
+  666: static void hl_decode_mb(SVQ3Context *s)
+  667: {
+  668:     const int mb_x    = s->mb_x;
+  669:     const int mb_y    = s->mb_y;
+  670:     const int mb_xy   = s->mb_xy;
+  671:     const int mb_type = s->cur_pic->mb_type[mb_xy];
+  672:     uint8_t *dest_y, *dest_cb, *dest_cr;
+  673:     int linesize, uvlinesize;
+  674:     int i, j;
+  675:     const int *block_offset = &s->block_offset[0];
+  676:     const int block_h   = 16 >> 1;
+  677: 
+  678:     linesize   = s->cur_pic->f->linesize[0];
+  679:     uvlinesize = s->cur_pic->f->linesize[1];
+  680: 
+  681:     dest_y  = s->cur_pic->f->data[0] + (mb_x     + mb_y * linesize)  * 16;
+  682:     dest_cb = s->cur_pic->f->data[1] +  mb_x * 8 + mb_y * uvlinesize * block_h;
+  683:     dest_cr = s->cur_pic->f->data[2] +  mb_x * 8 + mb_y * uvlinesize * block_h;
+  684: 
+  685:     s->vdsp.prefetch(dest_y  + (s->mb_x & 3) * 4 * linesize   + 64, linesize,      4);
+  686:     s->vdsp.prefetch(dest_cb + (s->mb_x & 7)     * uvlinesize + 64, dest_cr - dest_cb, 2);
+  687: 
+  688:     if (IS_INTRA(mb_type)) {
+  689:         s->hpc.pred8x8[s->chroma_pred_mode](dest_cb, uvlinesize);
+  690:         s->hpc.pred8x8[s->chroma_pred_mode](dest_cr, uvlinesize);
+  691: 
+  692:         hl_decode_mb_predict_luma(s, mb_type, block_offset, linesize, dest_y);
+  693:     }
+  694: 
+  695:     hl_decode_mb_idct_luma(s, mb_type, block_offset, linesize, dest_y);
+  696: 
+  697:     if (s->cbp & 0x30) {
+  698:         uint8_t *dest[2] = { dest_cb, dest_cr };
+  699:         s->h264dsp.h264_chroma_dc_dequant_idct(s->mb + 16 * 16 * 1,
+  700:                                                s->dequant4_coeff[4][0]);
+  701:         s->h264dsp.h264_chroma_dc_dequant_idct(s->mb + 16 * 16 * 2,
+  702:                                                s->dequant4_coeff[4][0]);
+  703:         for (j = 1; j < 3; j++) {
+  704:             for (i = j * 16; i < j * 16 + 4; i++)
+  705:                 if (s->non_zero_count_cache[scan8[i]] || s->mb[i * 16]) {
+
+--- libavcodec/x86/h264_intrapred_init.c (1 function(s) containing 'pred16x16') ---
+   28: #include "libavcodec/h264pred.h"
+   29: 
+   30: #define PRED4x4(TYPE, DEPTH, OPT) \
+   31: void ff_pred4x4_ ## TYPE ## _ ## DEPTH ## _ ## OPT (uint8_t *src, \
+   32:                                                     const uint8_t *topright, \
+   33:                                                     ptrdiff_t stride);
+   34: 
+   35: PRED4x4(dc, 10, mmxext)
+   36: PRED4x4(down_left, 10, sse2)
+   37: PRED4x4(down_left, 10, avx)
+   38: PRED4x4(down_right, 10, sse2)
+   39: PRED4x4(down_right, 10, ssse3)
+   40: PRED4x4(down_right, 10, avx)
+   41: PRED4x4(vertical_left, 10, sse2)
+   42: PRED4x4(vertical_left, 10, avx)
+   43: PRED4x4(vertical_right, 10, sse2)
+   44: PRED4x4(vertical_right, 10, ssse3)
+   45: PRED4x4(vertical_right, 10, avx)
+   46: PRED4x4(horizontal_up, 10, mmxext)
+   47: PRED4x4(horizontal_down, 10, sse2)
+   48: PRED4x4(horizontal_down, 10, ssse3)
+   49: PRED4x4(horizontal_down, 10, avx)
+   50: 
+   51: #define PRED8x8(TYPE, DEPTH, OPT) \
+   52: void ff_pred8x8_ ## TYPE ## _ ## DEPTH ## _ ## OPT (uint8_t *src, \
+   53:                                                     ptrdiff_t stride);
+   54: 
+   55: PRED8x8(dc, 10, sse2)
+   56: PRED8x8(top_dc, 10, sse2)
+   57: PRED8x8(plane, 10, sse2)
+   58: PRED8x8(vertical, 10, sse2)
+   59: PRED8x8(horizontal, 10, sse2)
+   60: 
+   61: #define PRED8x8L(TYPE, DEPTH, OPT)\
+   62: void ff_pred8x8l_ ## TYPE ## _ ## DEPTH ## _ ## OPT (uint8_t *src, \
+   63:                                                      int has_topleft, \
+   64:                                                      int has_topright, \
+   65:                                                      ptrdiff_t stride);
+   66: 
+   67: PRED8x8L(dc, 10, sse2)
+   68: PRED8x8L(dc, 10, avx)
+   69: PRED8x8L(128_dc, 10, sse2)
+   70: PRED8x8L(top_dc, 10, sse2)
+   71: PRED8x8L(top_dc, 10, avx)
+   72: PRED8x8L(vertical, 10, sse2)
+   73: PRED8x8L(vertical, 10, avx)
+   74: PRED8x8L(horizontal, 10, sse2)
+   75: PRED8x8L(horizontal, 10, ssse3)
+   76: PRED8x8L(horizontal, 10, avx)
+   77: PRED8x8L(down_left, 10, sse2)
+   78: PRED8x8L(down_left, 10, ssse3)
+   79: PRED8x8L(down_left, 10, avx)
+   80: PRED8x8L(down_right, 10, sse2)
+   81: PRED8x8L(down_right, 10, ssse3)
+   82: PRED8x8L(down_right, 10, avx)
+   83: PRED8x8L(vertical_right, 10, sse2)
+   84: PRED8x8L(vertical_right, 10, ssse3)
+   85: PRED8x8L(vertical_right, 10, avx)
+   86: PRED8x8L(horizontal_up, 10, sse2)
+   87: PRED8x8L(horizontal_up, 10, ssse3)
+   88: PRED8x8L(horizontal_up, 10, avx)
+   89: 
+   90: #define PRED16x16(TYPE, DEPTH, OPT)\
+   91: void ff_pred16x16_ ## TYPE ## _ ## DEPTH ## _ ## OPT (uint8_t *src, \
+   92:                                                       ptrdiff_t stride);
+   93: 
+   94: PRED16x16(dc, 10, sse2)
+   95: PRED16x16(top_dc, 10, sse2)
+   96: PRED16x16(128_dc, 10, sse2)
+   97: PRED16x16(left_dc, 10, sse2)
+   98: PRED16x16(vertical, 10, sse2)
+   99: PRED16x16(horizontal, 10, sse2)
+  100: 
+  101: /* 8-bit versions */
+  102: PRED16x16(vertical, 8, sse)
+  103: PRED16x16(horizontal, 8, sse2)
+  104: PRED16x16(horizontal, 8, ssse3)
+  105: PRED16x16(dc, 8, sse2)
+  106: PRED16x16(dc, 8, ssse3)
+  107: PRED16x16(plane_h264, 8, sse2)
+  108: PRED16x16(plane_h264, 8, ssse3)
+  109: PRED16x16(plane_rv40, 8, sse2)
+  110: PRED16x16(plane_rv40, 8, ssse3)
+  111: PRED16x16(plane_svq3, 8, sse2)
+  112: PRED16x16(plane_svq3, 8, ssse3)
+  113: PRED16x16(tm_vp8, 8, sse2)
+  114: PRED16x16(tm_vp8, 8, avx2)
+  115: 
+  116: PRED8x8(top_dc, 8, mmxext)
+  117: PRED8x8(dc_rv40, 8, mmxext)
+  118: PRED8x8(dc, 8, mmxext)
+  119: PRED8x8(vertical, 8, sse2)
+  120: PRED8x8(horizontal, 8, mmxext)
+  121: PRED8x8(horizontal, 8, ssse3)
+  122: PRED8x8(plane, 8, sse2)
+  123: PRED8x8(plane, 8, ssse3)
+  124: PRED8x8(tm_vp8, 8, sse2)
+  125: PRED8x8(tm_vp8, 8, ssse3)
+  126: 
+  127: PRED8x8L(top_dc, 8, mmxext)
+  128: PRED8x8L(top_dc, 8, ssse3)
+  129: PRED8x8L(dc, 8, mmxext)
+  130: PRED8x8L(dc, 8, ssse3)
+  131: PRED8x8L(horizontal, 8, mmxext)
+  132: PRED8x8L(horizontal, 8, ssse3)
+  133: PRED8x8L(vertical, 8, mmxext)
+  134: PRED8x8L(vertical, 8, ssse3)
+  135: PRED8x8L(down_left, 8, sse2)
+  136: PRED8x8L(down_left, 8, ssse3)
+  137: PRED8x8L(down_right, 8, sse2)
+  138: PRED8x8L(down_right, 8, ssse3)
+  139: PRED8x8L(vertical_right, 8, sse2)
+  140: PRED8x8L(vertical_right, 8, ssse3)
+  141: PRED8x8L(vertical_left, 8, sse2)
+  142: PRED8x8L(vertical_left, 8, ssse3)
+  143: PRED8x8L(horizontal_up, 8, mmxext)
+  144: PRED8x8L(horizontal_up, 8, ssse3)
+  145: PRED8x8L(horizontal_down, 8, sse2)
+  146: PRED8x8L(horizontal_down, 8, ssse3)
+  147: 
+  148: PRED4x4(dc, 8, mmxext)
+  149: PRED4x4(down_left, 8, mmxext)
+  150: PRED4x4(down_right, 8, mmxext)
+  151: PRED4x4(vertical_left, 8, mmxext)
+  152: PRED4x4(vertical_right, 8, mmxext)
+  153: PRED4x4(horizontal_up, 8, mmxext)
+  154: PRED4x4(horizontal_down, 8, mmxext)
+  155: PRED4x4(tm_vp8, 8, mmxext)
+  156: PRED4x4(tm_vp8, 8, ssse3)
+  157: PRED4x4(vertical_vp8, 8, mmxext)
+  158: 
+  159: av_cold void ff_h264_pred_init_x86(H264PredContext *h, int codec_id,
+  160:                                    const int bit_depth,
+  161:                                    const int chroma_format_idc)
+  162: {
+  163:     int cpu_flags = av_get_cpu_flags();
+  164: 
+  165:     if (bit_depth == 8) {
+  166:         if (EXTERNAL_MMXEXT(cpu_flags)) {
+  167:             if (chroma_format_idc <= 1)
+  168:                 h->pred8x8[HOR_PRED8x8          ] = ff_pred8x8_horizontal_8_mmxext;
+  169:             h->pred8x8l [TOP_DC_PRED            ] = ff_pred8x8l_top_dc_8_mmxext;
+  170:             h->pred8x8l [DC_PRED                ] = ff_pred8x8l_dc_8_mmxext;
+  171:             h->pred8x8l [HOR_PRED               ] = ff_pred8x8l_horizontal_8_mmxext;
+  172:             h->pred8x8l [VERT_PRED              ] = ff_pred8x8l_vertical_8_mmxext;
+  173:             h->pred8x8l [HOR_UP_PRED            ] = ff_pred8x8l_horizontal_up_8_mmxext;
+  174:             h->pred4x4  [DIAG_DOWN_RIGHT_PRED   ] = ff_pred4x4_down_right_8_mmxext;
+  175:             h->pred4x4  [VERT_RIGHT_PRED        ] = ff_pred4x4_vertical_right_8_mmxext;
+  176:             h->pred4x4  [HOR_DOWN_PRED          ] = ff_pred4x4_horizontal_down_8_mmxext;
+  177:             h->pred4x4  [DC_PRED                ] = ff_pred4x4_dc_8_mmxext;
+  178:             if (codec_id == AV_CODEC_ID_VP7 || codec_id == AV_CODEC_ID_VP8 ||
+  179:                 codec_id == AV_CODEC_ID_H264) {
+  180:                 h->pred4x4  [DIAG_DOWN_LEFT_PRED] = ff_pred4x4_down_left_8_mmxext;
+  181:             }
+  182:             if (codec_id == AV_CODEC_ID_SVQ3 || codec_id == AV_CODEC_ID_H264) {
+  183:                 h->pred4x4  [VERT_LEFT_PRED     ] = ff_pred4x4_vertical_left_8_mmxext;
+  184:             }
+  185:             if (codec_id != AV_CODEC_ID_RV40) {
+  186:                 h->pred4x4  [HOR_UP_PRED        ] = ff_pred4x4_horizontal_up_8_mmxext;
+  187:             }
+  188:             if (codec_id == AV_CODEC_ID_SVQ3 || codec_id == AV_CODEC_ID_H264) {
+  189:                 if (chroma_format_idc <= 1) {
+  190:                     h->pred8x8[TOP_DC_PRED8x8   ] = ff_pred8x8_top_dc_8_mmxext;
+  191:                     h->pred8x8[DC_PRED8x8       ] = ff_pred8x8_dc_8_mmxext;
+  192:                 }
+  193:             }
+  194:             if (codec_id == AV_CODEC_ID_VP7 || codec_id == AV_CODEC_ID_VP8) {
+  195:                 h->pred8x8  [DC_PRED8x8         ] = ff_pred8x8_dc_rv40_8_mmxext;
+  196:                 h->pred4x4  [TM_VP8_PRED        ] = ff_pred4x4_tm_vp8_8_mmxext;
+  197:                 h->pred4x4  [VERT_PRED          ] = ff_pred4x4_vertical_vp8_8_mmxext;
+  198:             }
+  199:         }
+  200: 
+  201:         if (EXTERNAL_SSE(cpu_flags)) {
+  202:             h->pred16x16[VERT_PRED8x8] = ff_pred16x16_vertical_8_sse;
+  203:         }
+  204: 
+  205:         if (EXTERNAL_SSE2(cpu_flags)) {
+  206:             h->pred16x16[HOR_PRED8x8          ] = ff_pred16x16_horizontal_8_sse2;
+  207:             h->pred16x16[DC_PRED8x8           ] = ff_pred16x16_dc_8_sse2;
+  208:             h->pred8x8l [DIAG_DOWN_LEFT_PRED  ] = ff_pred8x8l_down_left_8_sse2;
+  209:             h->pred8x8l [DIAG_DOWN_RIGHT_PRED ] = ff_pred8x8l_down_right_8_sse2;
+  210:             h->pred8x8l [VERT_RIGHT_PRED      ] = ff_pred8x8l_vertical_right_8_sse2;
+  211:             h->pred8x8l [VERT_LEFT_PRED       ] = ff_pred8x8l_vertical_left_8_sse2;
+  212:             h->pred8x8l [HOR_DOWN_PRED        ] = ff_pred8x8l_horizontal_down_8_sse2;
+  213:             if (chroma_format_idc <= 1)
+  214:                 h->pred8x8  [VERT_PRED8x8     ] = ff_pred8x8_vertical_8_sse2;
+  215:             if (codec_id == AV_CODEC_ID_VP7 || codec_id == AV_CODEC_ID_VP8) {
+  216:                 h->pred16x16[PLANE_PRED8x8    ] = ff_pred16x16_tm_vp8_8_sse2;
+  217:                 h->pred8x8  [PLANE_PRED8x8    ] = ff_pred8x8_tm_vp8_8_sse2;
+  218:             } else {
+  219:                 if (chroma_format_idc <= 1)
+  220:                     h->pred8x8  [PLANE_PRED8x8] = ff_pred8x8_plane_8_sse2;
+  221:                 if (codec_id == AV_CODEC_ID_SVQ3) {
+  222:                     h->pred16x16[PLANE_PRED8x8] = ff_pred16x16_plane_svq3_8_sse2;
+  223:                 } else if (codec_id == AV_CODEC_ID_RV40) {
+  224:                     h->pred16x16[PLANE_PRED8x8] = ff_pred16x16_plane_rv40_8_sse2;
+  225:                 } else {
+  226:                     h->pred16x16[PLANE_PRED8x8] = ff_pred16x16_plane_h264_8_sse2;
+  227:                 }
+  228:             }
+  229:         }
+  230: 
+  231:         if (EXTERNAL_SSSE3(cpu_flags)) {
+  232:             h->pred16x16[HOR_PRED8x8          ] = ff_pred16x16_horizontal_8_ssse3;
+  233:             h->pred16x16[DC_PRED8x8           ] = ff_pred16x16_dc_8_ssse3;
+  234:             if (chroma_format_idc <= 1)
+  235:                 h->pred8x8  [HOR_PRED8x8      ] = ff_pred8x8_horizontal_8_ssse3;
+  236:             h->pred8x8l [TOP_DC_PRED          ] = ff_pred8x8l_top_dc_8_ssse3;
+  237:             h->pred8x8l [DC_PRED              ] = ff_pred8x8l_dc_8_ssse3;
+  238:             h->pred8x8l [HOR_PRED             ] = ff_pred8x8l_horizontal_8_ssse3;
+  239:             h->pred8x8l [VERT_PRED            ] = ff_pred8x8l_vertical_8_ssse3;
+  240:             h->pred8x8l [DIAG_DOWN_LEFT_PRED  ] = ff_pred8x8l_down_left_8_ssse3;
+  241:             h->pred8x8l [DIAG_DOWN_RIGHT_PRED ] = ff_pred8x8l_down_right_8_ssse3;
+  242:             h->pred8x8l [VERT_RIGHT_PRED      ] = ff_pred8x8l_vertical_right_8_ssse3;
+  243:             h->pred8x8l [VERT_LEFT_PRED       ] = ff_pred8x8l_vertical_left_8_ssse3;
+  244:             h->pred8x8l [HOR_UP_PRED          ] = ff_pred8x8l_horizontal_up_8_ssse3;
+  245:             h->pred8x8l [HOR_DOWN_PRED        ] = ff_pred8x8l_horizontal_down_8_ssse3;
+  246:             if (codec_id == AV_CODEC_ID_VP7 || codec_id == AV_CODEC_ID_VP8) {
+  247:                 h->pred8x8  [PLANE_PRED8x8    ] = ff_pred8x8_tm_vp8_8_ssse3;
+  248:                 h->pred4x4  [TM_VP8_PRED      ] = ff_pred4x4_tm_vp8_8_ssse3;
+  249:             } else {
+  250:                 if (chroma_format_idc <= 1)
+  251:                     h->pred8x8  [PLANE_PRED8x8] = ff_pred8x8_plane_8_ssse3;
+  252:                 if (codec_id == AV_CODEC_ID_SVQ3) {
+  253:                     h->pred16x16[PLANE_PRED8x8] = ff_pred16x16_plane_svq3_8_ssse3;
+  254:                 } else if (codec_id == AV_CODEC_ID_RV40) {
+  255:                     h->pred16x16[PLANE_PRED8x8] = ff_pred16x16_plane_rv40_8_ssse3;
+  256:                 } else {
+  257:                     h->pred16x16[PLANE_PRED8x8] = ff_pred16x16_plane_h264_8_ssse3;
+  258:                 }
+  259:             }
+  260:         }
+  261: 
+  262:         if(EXTERNAL_AVX2(cpu_flags)){
+  263:             if (codec_id == AV_CODEC_ID_VP8) {
+  264:                 h->pred16x16[PLANE_PRED8x8    ] = ff_pred16x16_tm_vp8_8_avx2;
+  265:             }
+  266:         }
+  267:     } else if (bit_depth == 10) {
+  268:         if (EXTERNAL_MMXEXT(cpu_flags)) {
+  269:             h->pred4x4[DC_PRED             ] = ff_pred4x4_dc_10_mmxext;
+  270:             h->pred4x4[HOR_UP_PRED         ] = ff_pred4x4_horizontal_up_10_mmxext;
+  271:         }
+  272:         if (EXTERNAL_SSE2(cpu_flags)) {
+  273:             h->pred4x4[DIAG_DOWN_LEFT_PRED ] = ff_pred4x4_down_left_10_sse2;
+  274:             h->pred4x4[DIAG_DOWN_RIGHT_PRED] = ff_pred4x4_down_right_10_sse2;
+  275:             h->pred4x4[VERT_LEFT_PRED      ] = ff_pred4x4_vertical_left_10_sse2;
+  276:             h->pred4x4[VERT_RIGHT_PRED     ] = ff_pred4x4_vertical_right_10_sse2;
+  277:             h->pred4x4[HOR_DOWN_PRED       ] = ff_pred4x4_horizontal_down_10_sse2;
+  278: 
+  279:             if (chroma_format_idc <= 1) {
+  280:                 h->pred8x8[DC_PRED8x8      ] = ff_pred8x8_dc_10_sse2;
+  281:                 h->pred8x8[TOP_DC_PRED8x8  ] = ff_pred8x8_top_dc_10_sse2;
+  282:                 h->pred8x8[PLANE_PRED8x8   ] = ff_pred8x8_plane_10_sse2;
+  283:                 h->pred8x8[VERT_PRED8x8    ] = ff_pred8x8_vertical_10_sse2;
+  284:                 h->pred8x8[HOR_PRED8x8     ] = ff_pred8x8_horizontal_10_sse2;
+  285:             }
+  286: 
+  287:             h->pred8x8l[VERT_PRED           ] = ff_pred8x8l_vertical_10_sse2;
+  288:             h->pred8x8l[HOR_PRED            ] = ff_pred8x8l_horizontal_10_sse2;
+  289:             h->pred8x8l[DC_PRED             ] = ff_pred8x8l_dc_10_sse2;
+  290:             h->pred8x8l[DC_128_PRED         ] = ff_pred8x8l_128_dc_10_sse2;
+  291:             h->pred8x8l[TOP_DC_PRED         ] = ff_pred8x8l_top_dc_10_sse2;
+  292:             h->pred8x8l[DIAG_DOWN_LEFT_PRED ] = ff_pred8x8l_down_left_10_sse2;
+  293:             h->pred8x8l[DIAG_DOWN_RIGHT_PRED] = ff_pred8x8l_down_right_10_sse2;
+  294:             h->pred8x8l[VERT_RIGHT_PRED     ] = ff_pred8x8l_vertical_right_10_sse2;
+  295:             h->pred8x8l[HOR_UP_PRED         ] = ff_pred8x8l_horizontal_up_10_sse2;
+  296: 
+  297:             h->pred16x16[DC_PRED8x8        ] = ff_pred16x16_dc_10_sse2;
+  298:             h->pred16x16[TOP_DC_PRED8x8    ] = ff_pred16x16_top_dc_10_sse2;
+  299:             h->pred16x16[DC_128_PRED8x8    ] = ff_pred16x16_128_dc_10_sse2;
+  300:             h->pred16x16[LEFT_DC_PRED8x8   ] = ff_pred16x16_left_dc_10_sse2;
+  301:             h->pred16x16[VERT_PRED8x8      ] = ff_pred16x16_vertical_10_sse2;
+  302:             h->pred16x16[HOR_PRED8x8       ] = ff_pred16x16_horizontal_10_sse2;
+  303:         }
+  304:         if (EXTERNAL_SSSE3(cpu_flags)) {
+  305:             h->pred4x4[DIAG_DOWN_RIGHT_PRED] = ff_pred4x4_down_right_10_ssse3;
+  306:             h->pred4x4[VERT_RIGHT_PRED     ] = ff_pred4x4_vertical_right_10_ssse3;
+  307:             h->pred4x4[HOR_DOWN_PRED       ] = ff_pred4x4_horizontal_down_10_ssse3;
+  308: 
+  309:             h->pred8x8l[HOR_PRED            ] = ff_pred8x8l_horizontal_10_ssse3;
+  310:             h->pred8x8l[DIAG_DOWN_LEFT_PRED ] = ff_pred8x8l_down_left_10_ssse3;
+  311:             h->pred8x8l[DIAG_DOWN_RIGHT_PRED] = ff_pred8x8l_down_right_10_ssse3;
+  312:             h->pred8x8l[VERT_RIGHT_PRED     ] = ff_pred8x8l_vertical_right_10_ssse3;
+  313:             h->pred8x8l[HOR_UP_PRED         ] = ff_pred8x8l_horizontal_up_10_ssse3;
+  314:         }
+  315:         if (EXTERNAL_AVX(cpu_flags)) {
+  316:             h->pred4x4[DIAG_DOWN_LEFT_PRED ] = ff_pred4x4_down_left_10_avx;
+  317:             h->pred4x4[DIAG_DOWN_RIGHT_PRED] = ff_pred4x4_down_right_10_avx;
+  318:             h->pred4x4[VERT_LEFT_PRED      ] = ff_pred4x4_vertical_left_10_avx;
+  319:             h->pred4x4[VERT_RIGHT_PRED     ] = ff_pred4x4_vertical_right_10_avx;
+  320:             h->pred4x4[HOR_DOWN_PRED       ] = ff_pred4x4_horizontal_down_10_avx;
+  321: 
+  322:             h->pred8x8l[VERT_PRED           ] = ff_pred8x8l_vertical_10_avx;
+  323:             h->pred8x8l[HOR_PRED            ] = ff_pred8x8l_horizontal_10_avx;
+  324:             h->pred8x8l[DC_PRED             ] = ff_pred8x8l_dc_10_avx;
+  325:             h->pred8x8l[TOP_DC_PRED         ] = ff_pred8x8l_top_dc_10_avx;
+  326:             h->pred8x8l[DIAG_DOWN_RIGHT_PRED] = ff_pred8x8l_down_right_10_avx;
+  327:             h->pred8x8l[DIAG_DOWN_LEFT_PRED ] = ff_pred8x8l_down_left_10_avx;
+  328:             h->pred8x8l[VERT_RIGHT_PRED     ] = ff_pred8x8l_vertical_right_10_avx;
+  329:             h->pred8x8l[HOR_UP_PRED         ] = ff_pred8x8l_horizontal_up_10_avx;
+  330:         }
+  331:     }
+  332: }
+
+--- libavcodec/arm/h264pred_init_arm.c (1 function(s) containing 'pred16x16') ---
+   26: #include "libavcodec/h264pred.h"
+   27: 
+   28: void ff_pred16x16_vert_neon(uint8_t *src, ptrdiff_t stride);
+   29: void ff_pred16x16_hor_neon(uint8_t *src, ptrdiff_t stride);
+   30: void ff_pred16x16_plane_neon(uint8_t *src, ptrdiff_t stride);
+   31: void ff_pred16x16_dc_neon(uint8_t *src, ptrdiff_t stride);
+   32: void ff_pred16x16_128_dc_neon(uint8_t *src, ptrdiff_t stride);
+   33: void ff_pred16x16_left_dc_neon(uint8_t *src, ptrdiff_t stride);
+   34: void ff_pred16x16_top_dc_neon(uint8_t *src, ptrdiff_t stride);
+   35: 
+   36: void ff_pred8x8_vert_neon(uint8_t *src, ptrdiff_t stride);
+   37: void ff_pred8x8_hor_neon(uint8_t *src, ptrdiff_t stride);
+   38: void ff_pred8x8_plane_neon(uint8_t *src, ptrdiff_t stride);
+   39: void ff_pred8x8_dc_neon(uint8_t *src, ptrdiff_t stride);
+   40: void ff_pred8x8_128_dc_neon(uint8_t *src, ptrdiff_t stride);
+   41: void ff_pred8x8_left_dc_neon(uint8_t *src, ptrdiff_t stride);
+   42: void ff_pred8x8_top_dc_neon(uint8_t *src, ptrdiff_t stride);
+   43: void ff_pred8x8_l0t_dc_neon(uint8_t *src, ptrdiff_t stride);
+   44: void ff_pred8x8_0lt_dc_neon(uint8_t *src, ptrdiff_t stride);
+   45: void ff_pred8x8_l00_dc_neon(uint8_t *src, ptrdiff_t stride);
+   46: void ff_pred8x8_0l0_dc_neon(uint8_t *src, ptrdiff_t stride);
+   47: 
+   48: static av_cold void h264_pred_init_neon(H264PredContext *h, int codec_id,
+   49:                                         const int bit_depth,
+   50:                                         const int chroma_format_idc)
+   51: {
+   52: #if HAVE_NEON
+   53:     const int high_depth = bit_depth > 8;
+   54: 
+   55:     if (high_depth)
+   56:         return;
+   57: 
+   58:     if (chroma_format_idc <= 1) {
+   59:         h->pred8x8[VERT_PRED8x8     ] = ff_pred8x8_vert_neon;
+   60:         h->pred8x8[HOR_PRED8x8      ] = ff_pred8x8_hor_neon;
+   61:         if (codec_id != AV_CODEC_ID_VP7 && codec_id != AV_CODEC_ID_VP8)
+   62:             h->pred8x8[PLANE_PRED8x8] = ff_pred8x8_plane_neon;
+   63:         h->pred8x8[DC_128_PRED8x8   ] = ff_pred8x8_128_dc_neon;
+   64:         if (codec_id != AV_CODEC_ID_RV40 && codec_id != AV_CODEC_ID_VP7 &&
+   65:             codec_id != AV_CODEC_ID_VP8) {
+   66:             h->pred8x8[DC_PRED8x8     ] = ff_pred8x8_dc_neon;
+   67:             h->pred8x8[LEFT_DC_PRED8x8] = ff_pred8x8_left_dc_neon;
+   68:             h->pred8x8[TOP_DC_PRED8x8 ] = ff_pred8x8_top_dc_neon;
+   69:             h->pred8x8[ALZHEIMER_DC_L0T_PRED8x8] = ff_pred8x8_l0t_dc_neon;
+   70:             h->pred8x8[ALZHEIMER_DC_0LT_PRED8x8] = ff_pred8x8_0lt_dc_neon;
+   71:             h->pred8x8[ALZHEIMER_DC_L00_PRED8x8] = ff_pred8x8_l00_dc_neon;
+   72:             h->pred8x8[ALZHEIMER_DC_0L0_PRED8x8] = ff_pred8x8_0l0_dc_neon;
+   73:         }
+   74:     }
+   75: 
+   76:     h->pred16x16[DC_PRED8x8     ] = ff_pred16x16_dc_neon;
+   77:     h->pred16x16[VERT_PRED8x8   ] = ff_pred16x16_vert_neon;
+   78:     h->pred16x16[HOR_PRED8x8    ] = ff_pred16x16_hor_neon;
+   79:     h->pred16x16[LEFT_DC_PRED8x8] = ff_pred16x16_left_dc_neon;
+   80:     h->pred16x16[TOP_DC_PRED8x8 ] = ff_pred16x16_top_dc_neon;
+   81:     h->pred16x16[DC_128_PRED8x8 ] = ff_pred16x16_128_dc_neon;
+   82:     if (codec_id != AV_CODEC_ID_SVQ3 && codec_id != AV_CODEC_ID_RV40 &&
+   83:         c

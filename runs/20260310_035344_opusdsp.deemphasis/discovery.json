@@ -1,0 +1,85 @@
+{
+  "symbol": "opusdsp.deemphasis",
+  "matches": [
+    {
+      "file": "libavcodec/x86/opusdsp_init.c",
+      "line": 34,
+      "text": "ctx->deemphasis = ff_opus_deemphasis_fma3;"
+    },
+    {
+      "file": "libavcodec/x86/opusdsp.asm",
+      "line": 29,
+      "text": "cglobal opus_deemphasis, 4, 4, 8, out, in, weights, len"
+    },
+    {
+      "file": "libavcodec/x86/opusdsp.asm",
+      "line": 31,
+      "text": "cglobal opus_deemphasis, 5, 5, 8, out, in, coeff, weights, len"
+    },
+    {
+      "file": "libavcodec/opus/dsp.c",
+      "line": 59,
+      "text": "ctx->deemphasis = deemphasis_c;"
+    },
+    {
+      "file": "libavcodec/opus/dec_celt.c",
+      "line": 460,
+      "text": "/* deemphasis */"
+    },
+    {
+      "file": "libavcodec/opus/dec_celt.c",
+      "line": 461,
+      "text": "block->emph_coeff = f->opusdsp.deemphasis(output[i],"
+    },
+    {
+      "file": "libavcodec/opus/dec_celt.c",
+      "line": 519,
+      "text": "* The deemphasis functions differ from libopus in that they require"
+    },
+    {
+      "file": "libavcodec/opus/dsp.h",
+      "line": 24,
+      "text": "float (*deemphasis)(float *out, float *in, float coeff, const float *weights, int len);"
+    },
+    {
+      "file": "libavcodec/aarch64/opusdsp_init.c",
+      "line": 34,
+      "text": "ctx->deemphasis = ff_opus_deemphasis_neon;"
+    },
+    {
+      "file": "libavcodec/aarch64/opusdsp_neon.S",
+      "line": 21,
+      "text": "function ff_opus_deemphasis_neon, export=1"
+    },
+    {
+      "file": "tests/checkasm/opusdsp.c",
+      "line": 103,
+      "text": "if (check_func(ctx.deemphasis, \"deemphasis\"))"
+    },
+    {
+      "file": "tests/checkasm/opusdsp.c",
+      "line": 105,
+      "text": "report(\"deemphasis\");"
+    },
+    {
+      "file": "libavcodec/opus/celt.h",
+      "line": 106,
+      "text": "OpusDSP             opusdsp;"
+    },
+    {
+      "file": "libavcodec/opus/dec_celt.c",
+      "line": 225,
+      "text": "f->opusdsp.postfilter(block->buf + 1024 + 2 * CELT_OVERLAP,"
+    },
+    {
+      "file": "libavcodec/opus/dec_celt.c",
+      "line": 580,
+      "text": "ff_opus_dsp_init(&frm->opusdsp);"
+    },
+    {
+      "file": "tests/checkasm/checkasm.c",
+      "line": 222,
+      "text": "{ \"opusdsp\", checkasm_check_opusdsp },"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "symbol": "sbrdsp.neg_odd_64",
+  "datatype": "float32",
+  "vectorizable": true,
+  "pattern": [
+    "tail"
+  ],
+  "has_stride": false,
+  "has_saturation": false,
+  "reduction": false,
+  "tail_required": true,
+  "math_expression": "for i in 0..63: if (i & 1) x[i] = -x[i]",
+  "c_candidates": [
+    "libavcodec/sbrdsp_template.c:ff_sbr_neg_odd_64_c (in template, exact line unknown from provided snippet)"
+  ],
+  "x86_refs": [
+    "libavcodec/x86/sbrdsp.asm:ff_sbr_neg_odd_64_sse (line unknown from provided snippet)"
+  ],
+  "arm_refs": [
+    "libavcodec/arm/sbrdsp_neon.S:ff_sbr_neg_odd_64_neon (line unknown from provided snippet)",
+    "libavcodec/aarch64/sbrdsp_neon.S:ff_sbr_neg_odd_64_neon (line unknown from provided snippet)"
+  ],
+  "notes": "INTFLOAT resolves to float in this build context (x86/arm/riscv init prototypes all use float*). Operation is in-place sign flip of odd-indexed elements among 64 scalars; RVV can implement with vector load/store and XOR sign-bit mask on lanes corresponding to odd indices, or multiply by alternating {+1,-1} factors. Fixed trip count=64 but RVV still needs tail handling for arbitrary VL."
+}

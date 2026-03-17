@@ -1,0 +1,26 @@
+{
+  "files": [
+    {
+      "path": "libavcodec/riscv/h264pred_rvv.S",
+      "content": "/*\n * RISC-V Vector (RVV) H.264 intra prediction\n *\n * This file is part of FFmpeg.\n *\n * FFmpeg is free software; you can redistribute it and/or\n * modify it under the terms of the GNU Lesser General Public\n * License as published by the Free Software Foundation; either\n * version 2.1 of the License, or (at your option) any later version.\n */\n\n#include \"config.h\"\n\n#if HAVE_RVV\n\n    .text\n    .align  2\n\n/*\n * void ff_pred16x16_vertical_8_rvv(uint8_t *src, ptrdiff_t stride)\n * a0 = src, a1 = stride\n */\n    .globl  ff_pred16x16_vertical_8_rvv\n    .type   ff_pred16x16_vertical_8_rvv, @function\nff_pred16x16_vertical_8_rvv:\n    add     t0, a0, x0          /* cur = src */\n    sub     t1, a0, a1          /* top = src - stride */\n\n    /* Set VL=16 bytes */\n    li      t2, 16\n    vsetvli t2, t2, e8, m1, ta, ma\n\n    vle8.v  v0, (t1)            /* load top[0..15] */\n\n    li      t3, 16              /* rows */\n1:\n    vse8.v  v0, (t0)            /* store row */\n    add     t0, t0, a1\n    addi    t3, t3, -1\n    bnez    t3, 1b\n    ret\n    .size   ff_pred16x16_vertical_8_rvv, .-ff_pred16x16_vertical_8_rvv\n\n#endif /* HAVE_RVV */\n"
+    },
+    {
+      "path": "libavcodec/riscv/h264pred_init_riscv.c",
+      "content": "/*\n * RISC-V optimizations for H.264 prediction\n *\n * This file is part of FFmpeg.\n *\n * FFmpeg is free software; you can redistribute it and/or\n * modify it under the terms of the GNU Lesser General Public\n * License as published by the Free Software Foundation; either\n * version 2.1 of the License, or (at your option) any later version.\n */\n\n#include <stddef.h>\n#include <stdint.h>\n\n#include \"config.h\"\n#include \"libavutil/attributes.h\"\n#include \"libavutil/cpu.h\"\n#include \"libavutil/riscv/cpu.h\"\n#include \"libavcodec/codec_id.h\"\n#include \"libavcodec/h264pred.h\"\n\n#if HAVE_RVV\nvoid ff_pred16x16_vertical_8_rvv(uint8_t *src, ptrdiff_t stride);\n#endif\n\nav_cold void ff_h264_pred_init_riscv(H264PredContext *h, int codec_id,\n                                     const int bit_depth,\n                                     const int chroma_format_idc)\n{\n#if HAVE_RVV\n    int flags = av_get_cpu_flags();\n\n    if (bit_depth == 8 && (flags & AV_CPU_FLAG_RVV)) {\n        /* Only register pred16x16 vertical for now */\n        h->pred16x16[VERT_PRED8x8] = ff_pred16x16_vertical_8_rvv;\n    }\n#endif\n}\n"
+    },
+    {
+      "path": "libavcodec/riscv/Makefile",
+      "content": "#\n# RISC-V optimizations\n#\n\nOBJS-$(CONFIG_H264PRED)               += riscv/h264pred_rvv.o riscv/h264pred_init_riscv.o\n"
+    }
+  ],
+  "patches": [
+    {
+      "path": "libavcodec/riscv/h264pred_init_riscv.c",
+      "diff": "--- a/libavcodec/riscv/h264pred_init_riscv.c\n+++ b/libavcodec/riscv/h264pred_init_riscv.c\n@@ -0,0 +1,43 @@\n+/*\n+ * RISC-V optimizations for H.264 prediction\n+ *\n+ * This file is part of FFmpeg.\n+ *\n+ * FFmpeg is free software; you can redistribute it and/or\n+ * modify it under the terms of the GNU Lesser General Public\n+ * License as published by the Free Software Foundation; either\n+ * version 2.1 of the License, or (at your option) any later version.\n+ */\n+\n+#include <stddef.h>\n+#include <stdint.h>\n+\n+#include \"config.h\"\n+#include \"libavutil/attributes.h\"\n+#include \"libavutil/cpu.h\"\n+#include \"libavutil/riscv/cpu.h\"\n+#include \"libavcodec/codec_id.h\"\n+#include \"libavcodec/h264pred.h\"\n+\n+#if HAVE_RVV\n+void ff_pred16x16_vertical_8_rvv(uint8_t *src, ptrdiff_t stride);\n+#endif\n+\n+av_cold void ff_h264_pred_init_riscv(H264PredContext *h, int codec_id,\n+                                     const int bit_depth,\n+                                     const int chroma_format_idc)\n+{\n+#if HAVE_RVV\n+    int flags = av_get_cpu_flags();\n+\n+    if (bit_depth == 8 && (flags & AV_CPU_FLAG_RVV)) {\n+        /* Only register pred16x16 vertical for now */\n+        h->pred16x16[VERT_PRED8x8] = ff_pred16x16_vertical_8_rvv;\n+    }\n+#endif\n+}\n"
+    },
+    {
+      "path": "libavcodec/riscv/Makefile",
+      "diff": "--- a/libavcodec/riscv/Makefile\n+++ b/libavcodec/riscv/Makefile\n@@ -0,0 +1,6 @@\n+#\n+# RISC-V optimizations\n+#\n+\n+OBJS-$(CONFIG_H264PRED)               += riscv/h264pred_rvv.o riscv/h264pred_init_riscv.o\n+"
+    }
+  ]
+}

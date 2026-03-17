@@ -1,0 +1,27 @@
+{
+  "symbol": "synth_filter.synth_filter",
+  "datatype": "float32",
+  "vectorizable": true,
+  "pattern": [
+    "butterfly",
+    "horizontal_add",
+    "stride_load",
+    "tail"
+  ],
+  "has_stride": true,
+  "has_saturation": false,
+  "reduction": true,
+  "tail_required": false,
+  "math_expression": "imdct_fn(imdct, synth_buf, in, sizeof(float)); for i in 0..15: a=synth_buf2[i]; b=synth_buf2[i+16]; c=0; for j in 0..7: c += window[i*16+j] * synth_buf[<stride/wrap addressing> + <index depending on i,j>] (plus symmetric terms); synth_buf2[i]=a+b; synth_buf2[i+16]=a-b; out[i]=scale*c (and similarly fill out[16..31] with paired/symmetric sums)",
+  "c_candidates": [
+    "libavcodec/synth_filter.c:static void synth_filter_float(AVTXContext *imdct, float *synth_buf_ptr, int *synth_buf_offset, float synth_buf2[32], const float window[512], float out[32], float in[32], float scale, av_tx_fn imdct_fn)"
+  ],
+  "x86_refs": [
+    "libavcodec/x86/synth_filter.asm:SECTION .text (contains ff_synth_filter_* SIMD implementation and macros)"
+  ],
+  "arm_refs": [
+    "libavcodec/arm/synth_filter_neon.S:function ff_synth_filter_float_neon",
+    "libavcodec/arm/synth_filter_vfp.S:(ff_synth_filter_float_vfp implementation)"
+  ],
+  "notes": "目标为 DCA synth_filter 浮点路径：包含 IMDCT 结果写入环形 synth_buf（offset/wrap），随后 32 点 synthesis windowing。核心为成对(butterfly)更新 synth_buf2[i] 与 synth_buf2[i+16]，并对 window[512] 与 synth_buf 的若干位置做乘加累加（存在跨步/环形寻址）。无饱和；有小规模水平求和（每输出样本累加多个乘积），适合 RVV 向量化乘加与最后标量归约。输出长度固定 32，无需 tail 处理，但可用 RVV 固定 VL=8/16 实现。"
+}

@@ -1,0 +1,3 @@
+patching file libavcodec/riscv/synth_filter.synth_filter_rvv.S
+patch: **** malformed patch at line 20: @@
+

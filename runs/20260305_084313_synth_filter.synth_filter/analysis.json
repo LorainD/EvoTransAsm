@@ -1,0 +1,26 @@
+{
+  "symbol": "synth_filter.synth_filter",
+  "datatype": "float32",
+  "vectorizable": true,
+  "pattern": [
+    "butterfly",
+    "stride_load",
+    "tail"
+  ],
+  "has_stride": true,
+  "has_saturation": false,
+  "reduction": false,
+  "tail_required": false,
+  "math_expression": "imdct_fn(imdct, synth_buf, in, sizeof(float)); for i in 0..15: a=synth_buf2[i]; b=synth_buf2[i+16]; c=0; /* then use synth_buf (ring buffer) and window[512] to compute out[0..31] via pairwise add/sub (butterfly) and windowed MACs; update synth_buf2 */",
+  "c_candidates": [
+    "libavcodec/synth_filter.c:static void synth_filter_float(AVTXContext *imdct, float *synth_buf_ptr, int *synth_buf_offset, float synth_buf2[32], const float window[512], float out[32], float in[32], float scale, av_tx_fn imdct_fn)"
+  ],
+  "x86_refs": [
+    "libavcodec/x86/synth_filter.asm:SECTION .text"
+  ],
+  "arm_refs": [
+    "libavcodec/arm/synth_filter_neon.S:function ff_synth_filter_float_neon, export=1",
+    "libavcodec/arm/synth_filter_vfp.S:IMDCT         .req    r0"
+  ],
+  "notes": "核心是DCA synth filter的32点输出生成：先IMDCT写入synth_buf（环形缓冲，offset按块更新/回绕），再对synth_buf2上下半区做butterfly（a/b）并结合window[512]做窗口加权的点积/累加生成out[32]，同时更新synth_buf2。可用RVV对windowed MAC与butterfly分段向量化；存在环形缓冲导致非连续/跨界访问（has_stride=true），但长度固定32/16，通常不需要尾处理。无饱和、无归约到单标量。x86/arm均有现成SIMD汇编实现可参考其数据重排与环绕处理。"
+}

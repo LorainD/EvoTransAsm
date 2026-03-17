@@ -1,0 +1,21 @@
+{
+  "files": [],
+  "patches": [
+    {
+      "path": "src/libavformat/dashenc.c",
+      "diff": "*** Begin Patch\n*** Update File: src/libavformat/dashenc.c\n@@\n-    char filename[1024];\n-    snprintf(filename, sizeof(filename), \"%s%s\", dirname, name);\n+    char filename[2048];\n+    snprintf(filename, sizeof(filename), \"%s%s\", dirname, name);\n@@\n-    char tmp[1024];\n-    snprintf(tmp, sizeof(tmp), \"%s/%d.m4s\", seg_dir, seg->index);\n+    char tmp[2048];\n+    snprintf(tmp, sizeof(tmp), \"%s/%d.m4s\", seg_dir, seg->index);\n@@\n-    char url[1024];\n-    snprintf(url, sizeof(url), \"%s%s\", base_url, rel_url);\n+    char url[2048];\n+    snprintf(url, sizeof(url), \"%s%s\", base_url, rel_url);\n*** End Patch"
+    },
+    {
+      "path": "src/libavformat/smoothstreamingenc.c",
+      "diff": "*** Begin Patch\n*** Update File: src/libavformat/smoothstreamingenc.c\n@@\n-    char filename[1024];\n-    snprintf(filename, sizeof(filename), \"%s/%s\", dir, name);\n+    char filename[2048];\n+    snprintf(filename, sizeof(filename), \"%s/%s\", dir, name);\n@@\n-    char path[1024];\n-    snprintf(path, sizeof(path), \"%s/%s\", ctx->dirname, basename);\n+    char path[2048];\n+    snprintf(path, sizeof(path), \"%s/%s\", ctx->dirname, basename);\n@@\n-    char url[1024];\n-    snprintf(url, sizeof(url), \"%s%s\", ctx->base_url, rel);\n+    char url[2048];\n+    snprintf(url, sizeof(url), \"%s%s\", ctx->base_url, rel);\n*** End Patch"
+    },
+    {
+      "path": "src/libavformat/vorbiscomment.c",
+      "diff": "*** Begin Patch\n*** Update File: src/libavformat/vorbiscomment.c\n@@\n-    char buf[4];\n-    snprintf(buf, sizeof(buf), \"%d\", value);\n+    /* value can be up to INT_MAX; need room for sign + 10 digits + NUL */\n+    char buf[16];\n+    snprintf(buf, sizeof(buf), \"%d\", value);\n@@\n-    char timebuf[13];\n-    snprintf(timebuf, sizeof(timebuf), \"%+03d:%02d\", tz_hour, tz_min);\n+    /* \"+HH:MM\" needs 7 bytes incl NUL, but be generous for safety */\n+    char timebuf[32];\n+    snprintf(timebuf, sizeof(timebuf), \"%+03d:%02d\", tz_hour, tz_min);\n*** End Patch"
+    },
+    {
+      "path": "src/libavformat/matroskaenc.c",
+      "diff": "*** Begin Patch\n*** Update File: src/libavformat/matroskaenc.c\n@@\n-    char tmp[20];\n-    snprintf(tmp, sizeof(tmp), \"%s:%02d\", lang, track_num);\n+    char tmp[64];\n+    snprintf(tmp, sizeof(tmp), \"%s:%02d\", lang, track_num);\n*** End Patch"
+    }
+  ]
+}

@@ -1,0 +1,80 @@
+{
+  "symbol": "synth_filter.synth_filter",
+  "matches": [
+    {
+      "file": "libavcodec/dca_core.h",
+      "line": 37,
+      "text": "#include \"synth_filter.h\""
+    },
+    {
+      "file": "libavcodec/dcadsp.h",
+      "line": 28,
+      "text": "#include \"synth_filter.h\""
+    },
+    {
+      "file": "libavcodec/synth_filter.c",
+      "line": 24,
+      "text": "#include \"synth_filter.h\""
+    },
+    {
+      "file": "libavcodec/x86/synth_filter.asm",
+      "line": 110,
+      "text": "; void ff_synth_filter_inner_<opt>(float *synth_buf, float synth_buf2[32],"
+    },
+    {
+      "file": "libavcodec/x86/synth_filter.asm",
+      "line": 114,
+      "text": "cglobal synth_filter_inner, 0, 6 + 4 * ARCH_X86_64, 7 + 6 * ARCH_X86_64, \\"
+    },
+    {
+      "file": "libavcodec/x86/synth_filter_init.c",
+      "line": 24,
+      "text": "#include \"libavcodec/synth_filter.h\""
+    },
+    {
+      "file": "libavcodec/aarch64/synth_filter_neon.S",
+      "line": 43,
+      "text": "function ff_synth_filter_float_neon, export=1"
+    },
+    {
+      "file": "libavcodec/aarch64/synth_filter_init.c",
+      "line": 26,
+      "text": "#include \"libavcodec/synth_filter.h\""
+    },
+    {
+      "file": "libavcodec/arm/synth_filter_neon.S",
+      "line": 23,
+      "text": "function ff_synth_filter_float_neon, export=1"
+    },
+    {
+      "file": "libavcodec/arm/synth_filter_init_arm.c",
+      "line": 26,
+      "text": "#include \"libavcodec/synth_filter.h\""
+    },
+    {
+      "file": "libavcodec/arm/synth_filter_vfp.S",
+      "line": 118,
+      "text": "/* void ff_synth_filter_float_vfp(FFTContext *imdct,"
+    },
+    {
+      "file": "libavcodec/arm/synth_filter_vfp.S",
+      "line": 123,
+      "text": "function ff_synth_filter_float_vfp, export=1"
+    },
+    {
+      "file": "tests/checkasm/checkasm.c",
+      "line": 149,
+      "text": "{ \"synth_filter\", checkasm_check_synth_filter },"
+    },
+    {
+      "file": "tests/checkasm/synth_filter.c",
+      "line": 32,
+      "text": "#include \"libavcodec/synth_filter.h\""
+    },
+    {
+      "file": "tests/checkasm/synth_filter.c",
+      "line": 125,
+      "text": "report(\"synth_filter\");"
+    }
+  ]
+}

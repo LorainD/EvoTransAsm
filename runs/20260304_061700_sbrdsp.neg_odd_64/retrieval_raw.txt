@@ -1,0 +1,11 @@
+{
+  "symbol": "sbrdsp.neg_odd_64",
+  "c": [],
+  "x86": [],
+  "arm": [],
+  "riscv": [],
+  "headers": [],
+  "makefiles": ["libavcodec/riscv/Makefile"],
+  "checkasm": ["tests/checkasm/sbrdsp.c"],
+  "notes": "Only explicit hit is in tests/checkasm/sbrdsp.c via check_func(sbrdsp.neg_odd_64, \"neg_odd_64\"). No other candidates provided; tests/checkasm/checkasm.c not present in candidate groups, so omitted."
+}

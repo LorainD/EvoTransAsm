@@ -1,0 +1,9 @@
+*** TODO PATCH (most conservative, apply manually if paths/macros differ) ***
+--- a/libavcodec/riscv/sbrdsp_init.c
++++ b/libavcodec/riscv/sbrdsp_init.c
+@@
++/* TODO: verify exact init file name/path and CPU flag macro used for RVV in this tree. */
++void ff_sbr_neg_odd_64_rvv(float *x);
+@@
++    /* TODO: choose the same feature gate used by other *_rvv hooks (e.g. have_rvv / AV_CPU_FLAG_RVV / ff_rv_has(...)). */
++    c->neg_odd_64 = ff_sbr_neg_odd_64_rvv;

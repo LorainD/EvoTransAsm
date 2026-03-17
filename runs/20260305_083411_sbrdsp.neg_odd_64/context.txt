@@ -1,0 +1,523 @@
+--- libavcodec/sbrdsp_template.c (head) ---
+/*
+ * AAC Spectral Band Replication decoding functions
+ * Copyright (c) 2008-2009 Robert Swain ( rob opendot cl )
+ * Copyright (c) 2009-2010 Alex Converse <alex.converse@gmail.com>
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+#include "config.h"
+#include "libavutil/attributes_internal.h"
+#include "libavutil/mem_internal.h"
+
+static void sbr_sum64x5_c(INTFLOAT *z)
+{
+    int k;
+    for (k = 0; k < 64; k++) {
+        INTFLOAT f = z[k] + z[k + 64] + z[k + 128] + z[k + 192] + z[k + 256];
+        z[k] = f;
+    }
+}
+
+static void sbr_qmf_deint_bfly_c(INTFLOAT *v, const INTFLOAT *src0, const INTFLOAT *src1)
+{
+    int i;
+    for (i = 0; i < 64; i++) {
+#if USE_FIXED
+
+--- libavcodec/sbrdsp.c (head) ---
+/*
+ * AAC Spectral Band Replication decoding functions
+ * Copyright (c) 2008-2009 Robert Swain ( rob opendot cl )
+ * Copyright (c) 2009-2010 Alex Converse <alex.converse@gmail.com>
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+#define USE_FIXED 0
+
+#include "aac.h"
+#include "libavutil/attributes.h"
+#include "libavutil/intfloat.h"
+#include "sbrdsp.h"
+
+static float sbr_sum_square_c(float (*x)[2], int n)
+{
+    float sum0 = 0.0f, sum1 = 0.0f;
+    int i;
+
+    for (i = 0; i < n; i += 2)
+    {
+        sum0 += x[i + 0][0] * x[i + 0][0];
+        sum1 += x[i + 0][1] * x[i + 0][1];
+        sum0 += x[i + 1][0] * x[i + 1][0];
+        sum1 += x[i + 1][1] * x[i + 1][1];
+
+--- libavcodec/sbrdsp_fixed.c (head) ---
+/*
+ * AAC Spectral Band Replication decoding functions
+ * Copyright (c) 2008-2009 Robert Swain ( rob opendot cl )
+ * Copyright (c) 2009-2010 Alex Converse <alex.converse@gmail.com>
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ *
+ * Note: Rounding-to-nearest used unless otherwise stated
+ *
+ */
+
+#define USE_FIXED 1
+
+#include "aac.h"
+#include "libavutil/attributes.h"
+#include "libavutil/intfloat.h"
+#include "sbrdsp.h"
+
+static SoftFloat sbr_sum_square_c(int (*x)[2], int n)
+{
+    SoftFloat ret;
+    uint64_t accu = 0, round;
+    uint64_t accu0 = 0, accu1 = 0, accu2 = 0, accu3 = 0;
+    int i, nz, nz0;
+    unsigned u;
+
+
+--- libavcodec/aacsbr_template.c (head) ---
+/*
+ * AAC Spectral Band Replication decoding functions
+ * Copyright (c) 2008-2009 Robert Swain ( rob opendot cl )
+ * Copyright (c) 2009-2010 Alex Converse <alex.converse@gmail.com>
+ *
+ * Fixed point code
+ * Copyright (c) 2013
+ *      MIPS Technologies, Inc., California.
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+/**
+ * @file
+ * AAC Spectral Band Replication decoding functions
+ * @author Robert Swain ( rob opendot cl )
+ * @author Stanislav Ocovaj ( stanislav.ocovaj@imgtec.com )
+ * @author Zoran Basaric ( zoran.basaric@imgtec.com )
+ */
+
+#include "aac/aacdec.h"
+#include "aac/aacdec_tab.h"
+#include "avcodec.h"
+#include "libavutil/qsort.h"
+#include "libavutil/mem.h"
+
+
+--- libavcodec/x86/sbrdsp.asm (head) ---
+;******************************************************************************
+;* AAC Spectral Band Replication decoding functions
+;* Copyright (C) 2012 Christophe Gisquet <christophe.gisquet@gmail.com>
+;*
+;* This file is part of FFmpeg.
+;*
+;* FFmpeg is free software; you can redistribute it and/or
+;* modify it under the terms of the GNU Lesser General Public
+;* License as published by the Free Software Foundation; either
+;* version 2.1 of the License, or (at your option) any later version.
+;*
+;* FFmpeg is distributed in the hope that it will be useful,
+;* but WITHOUT ANY WARRANTY; without even the implied warranty of
+;* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+;* Lesser General Public License for more details.
+;*
+;* You should have received a copy of the GNU Lesser General Public
+;* License along with FFmpeg; if not, write to the Free Software
+;* Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+;******************************************************************************
+
+%include "libavutil/x86/x86util.asm"
+
+SECTION_RODATA
+; mask equivalent for multiply by -1.0 1.0
+ps_mask         times 2 dd 1<<31, 0
+ps_mask2        times 2 dd 0, 1<<31
+ps_mask3        dd  0, 0, 0, 1<<31
+ps_noise0       times 2 dd  1.0,  0.0,
+ps_noise2       times 2 dd -1.0,  0.0
+ps_noise13      dd  0.0,  1.0, 0.0, -1.0
+                dd  0.0, -1.0, 0.0,  1.0
+                dd  0.0,  1.0, 0.0, -1.0
+cextern         sbr_noise_table
+cextern         ps_neg
+
+SECTION .text
+
+INIT_XMM sse
+cglobal sbr_sum_square, 2, 3, 6
+
+--- libavcodec/x86/sbrdsp_init.c (head) ---
+/*
+ * AAC Spectral Band Replication decoding functions
+ * Copyright (c) 2012 Christophe Gisquet <christophe.gisquet@gmail.com>
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+#include "config.h"
+#include "libavutil/attributes.h"
+#include "libavutil/cpu.h"
+#include "libavutil/x86/cpu.h"
+#include "libavcodec/sbrdsp.h"
+
+float ff_sbr_sum_square_sse(float (*x)[2], int n);
+void ff_sbr_sum64x5_sse(float *z);
+void ff_sbr_hf_g_filt_sse(float (*Y)[2], const float (*X_high)[40][2],
+                          const float *g_filt, int m_max, intptr_t ixh);
+void ff_sbr_hf_gen_sse(float (*X_high)[2], const float (*X_low)[2],
+                       const float alpha0[2], const float alpha1[2],
+                       float bw, int start, int end);
+void ff_sbr_neg_odd_64_sse(float *z);
+void ff_sbr_qmf_post_shuffle_sse(float W[32][2], const float *z);
+void ff_sbr_qmf_deint_bfly_sse2(float *v, const float *src0, const float *src1);
+void ff_sbr_qmf_pre_shuffle_sse2(float *z);
+
+void ff_sbr_hf_apply_noise_0_sse2(float (*Y)[2], const float *s_m,
+
+--- libavcodec/arm/sbrdsp_neon.S (head) ---
+/*
+ * Copyright (c) 2012 Mans Rullgard
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+#include "libavutil/arm/asm.S"
+
+function ff_sbr_sum64x5_neon, export=1
+        push            {lr}
+        add             r1,  r0,  # 64*4
+        add             r2,  r0,  #128*4
+        add             r3,  r0,  #192*4
+        add             lr,  r0,  #256*4
+        mov             r12, #64
+1:
+        vld1.32         {q0},     [r0,:128]
+        vld1.32         {q1},     [r1,:128]!
+        vadd.f32        q0,  q0,  q1
+        vld1.32         {q2},     [r2,:128]!
+        vadd.f32        q0,  q0,  q2
+        vld1.32         {q3},     [r3,:128]!
+        vadd.f32        q0,  q0,  q3
+        vld1.32         {q8},     [lr,:128]!
+        vadd.f32        q0,  q0,  q8
+        vst1.32         {q0},     [r0,:128]!
+
+--- libavcodec/arm/sbrdsp_init_arm.c (head) ---
+/*
+ * Copyright (c) 2012 Mans Rullgard
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+#include "config.h"
+#include "libavutil/arm/cpu.h"
+#include "libavutil/attributes.h"
+#include "libavcodec/sbrdsp.h"
+
+void ff_sbr_sum64x5_neon(float *z);
+float ff_sbr_sum_square_neon(float (*x)[2], int n);
+void ff_sbr_neg_odd_64_neon(float *x);
+void ff_sbr_qmf_pre_shuffle_neon(float *z);
+void ff_sbr_qmf_post_shuffle_neon(float W[32][2], const float *z);
+void ff_sbr_qmf_deint_neg_neon(float *v, const float *src);
+void ff_sbr_qmf_deint_bfly_neon(float *v, const float *src0, const float *src1);
+void ff_sbr_hf_g_filt_neon(float (*Y)[2], const float (*X_high)[40][2],
+                           const float *g_filt, int m_max, intptr_t ixh);
+void ff_sbr_hf_gen_neon(float (*X_high)[2], const float (*X_low)[2],
+                        const float alpha0[2], const float alpha1[2],
+                        float bw, int start, int end);
+void ff_sbr_autocorrelate_neon(const float x[40][2], float phi[3][2][2]);
+
+void ff_sbr_hf_apply_noise_0_neon(float Y[64][2], const float *s_m,
+
+--- libavcodec/aarch64/sbrdsp_neon.S (head) ---
+/*
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+#include "libavutil/aarch64/asm.S"
+
+const factors, align=4
+        .float 1.0, -1.0, 1.0, -1.0
+endconst
+
+const phi_noise_0, align=4
+        .float 1.0, 0.0, 1.0, 0.0
+endconst
+
+const phi_noise_1, align=4
+        .float 0.0,  1.0,  0.0, -1.0
+        .float 0.0, -1.0,  0.0,  1.0
+endconst
+
+const phi_noise_2, align=4
+        .float -1.0, 0.0, -1.0, 0.0
+endconst
+
+const phi_noise_3, align=4
+        .float 0.0, -1.0,  0.0,  1.0
+        .float 0.0,  1.0,  0.0, -1.0
+
+--- libavcodec/aarch64/sbrdsp_init_aarch64.c (head) ---
+/*
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+#include "config.h"
+#include "libavutil/aarch64/cpu.h"
+#include "libavutil/attributes.h"
+#include "libavcodec/sbrdsp.h"
+
+void ff_sbr_sum64x5_neon(float *z);
+float ff_sbr_sum_square_neon(float (*x)[2], int n);
+void ff_sbr_neg_odd_64_neon(float *x);
+void ff_sbr_qmf_pre_shuffle_neon(float *z);
+void ff_sbr_qmf_post_shuffle_neon(float W[32][2], const float *z);
+void ff_sbr_qmf_deint_neg_neon(float *v, const float *src);
+void ff_sbr_qmf_deint_bfly_neon(float *v, const float *src0, const float *src1);
+void ff_sbr_hf_g_filt_neon(float (*Y)[2], const float (*X_high)[40][2],
+                           const float *g_filt, int m_max, intptr_t ixh);
+void ff_sbr_hf_gen_neon(float (*X_high)[2], const float (*X_low)[2],
+                        const float alpha0[2], const float alpha1[2],
+                        float bw, int start, int end);
+void ff_sbr_autocorrelate_neon(const float x[40][2], float phi[3][2][2]);
+void ff_sbr_hf_apply_noise_0_neon(float Y[64][2], const float *s_m,
+                                  const float *q_filt, int noise,
+                                  int kx, int m_max);
+void ff_sbr_hf_apply_noise_1_neon(float Y[64][2], const float *s_m,
+
+--- libavcodec/riscv/sbrdsp_init.c (head) ---
+/*
+ * Copyright © 2023 Rémi Denis-Courmont.
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+#include "config.h"
+#include "libavutil/attributes.h"
+#include "libavutil/cpu.h"
+#include "libavutil/riscv/cpu.h"
+#include "libavcodec/sbrdsp.h"
+
+void ff_sbr_sum64x5_rvv(float *z);
+float ff_sbr_sum_square_rvv(float (*x)[2], int n);
+void ff_sbr_autocorrelate_rvv(const float x[40][2], float phi[3][2][2]);
+void ff_sbr_hf_gen_rvv(float (*X_high)[2], const float (*X_low)[2],
+                       const float alpha0[2], const float alpha1[2],
+                       float bw, int start, int end);
+void ff_sbr_hf_g_filt_rvv(float (*Y)[2], const float (*X_high)[40][2],
+                          const float *g_filt, int m_max, intptr_t ixh);
+void ff_sbr_hf_apply_noise_0_rvv(float (*Y)[2], const float *s,
+                                 const float *f, int n, int kx, int max);
+void ff_sbr_hf_apply_noise_1_rvv(float (*Y)[2], const float *s,
+                                 const float *f, int n, int kx, int max);
+void ff_sbr_hf_apply_noise_2_rvv(float (*Y)[2], const float *s,
+                                 const float *f, int n, int kx, int max);
+
+--- libavcodec/sbrdsp.h (head) ---
+/*
+ * Copyright (c) 2012 Mans Rullgard
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+#ifndef AVCODEC_SBRDSP_H
+#define AVCODEC_SBRDSP_H
+
+#include <stdint.h>
+#include "aac_defines.h"
+
+typedef struct SBRDSPContext {
+    void (*sum64x5)(INTFLOAT *z);
+    AAC_FLOAT (*sum_square)(INTFLOAT (*x)[2], int n);
+    void (*neg_odd_64)(INTFLOAT *x);
+    void (*qmf_pre_shuffle)(INTFLOAT *z);
+    void (*qmf_post_shuffle)(INTFLOAT W[32][2], const INTFLOAT *z);
+    void (*qmf_deint_neg)(INTFLOAT *v, const INTFLOAT *src);
+    void (*qmf_deint_bfly)(INTFLOAT *v, const INTFLOAT *src0, const INTFLOAT *src1);
+    void (*autocorrelate)(const INTFLOAT x[40][2], AAC_FLOAT phi[3][2][2]);
+    void (*hf_gen)(INTFLOAT (*X_high)[2], const INTFLOAT (*X_low)[2],
+                   const INTFLOAT alpha0[2], const INTFLOAT alpha1[2],
+                   INTFLOAT bw, int start, int end);
+    void (*hf_g_filt)(INTFLOAT (*Y)[2], const INTFLOAT (*X_high)[40][2],
+                      const AAC_FLOAT *g_filt, int m_max, intptr_t ixh);
+
+--- tests/checkasm/sbrdsp.c (around sbrdsp.neg_odd_64 @ line 271) ---
+   268:         test_sum_square();
+   269:     report("sum_square");
+   270: 
+   271:     if (check_func(sbrdsp.neg_odd_64, "neg_odd_64"))
+   272:         test_neg_odd_64();
+   273:     report("neg_odd_64");
+   274: 
+
+--- tests/checkasm/checkasm.c (head) ---
+/*
+ * Assembly testing and benchmarking tool
+ * Copyright (c) 2015 Henrik Gramner
+ * Copyright (c) 2008 Loren Merritt
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License a

@@ -1,0 +1,23 @@
+{
+  "symbol": "sbrdsp.neg_odd_64",
+  "datatype": "float",
+  "vectorizable": true,
+  "pattern": [
+    "tail"
+  ],
+  "has_stride": false,
+  "has_saturation": false,
+  "reduction": false,
+  "tail_required": true,
+  "math_expression": "for i in [0..63]: x[2*i+1] = -x[2*i+1]  (negate odd-indexed elements in a 128-float buffer representing 64 complex pairs [re,im])",
+  "c_candidates": [
+    "libavcodec/sbrdsp.h:47"
+  ],
+  "x86_refs": [
+    "libavcodec/x86/sbrdsp_init.c:32"
+  ],
+  "arm_refs": [
+    "libavcodec/arm/sbrdsp_init_arm.c:30"
+  ],
+  "notes": "From init prototypes: ff_sbr_neg_odd_64_{sse,neon}(float *x/z) implies INTFLOAT is float (USE_FIXED=0). Operation likely sign-flip on odd elements (imag parts) for 64 complex samples => 128 contiguous floats; no stride, no saturation, no reduction. RVV should handle VL tail since 128 may not be multiple of VL."
+}

@@ -1,0 +1,9 @@
+*** Begin Patch
+*** Update File: src/libavfilter/scene_sad.c
+@@
+ #include "scene_sad.h"
++
++#if ARCH_RISCV
++ff_scene_sad_fn ff_scene_sad_get_fn_riscv(int depth);
++#endif
+*** End Patch

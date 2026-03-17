@@ -1,0 +1,50 @@
+```json
+{
+  "symbol": "sbrdsp.neg_odd_64",
+  "c": [
+    "libavcodec/sbrdsp_template.c",
+    "libavcodec/sbrdsp.c",
+    "libavcodec/aacsbr_template.c"
+  ],
+  "x86": [
+    "libavcodec/x86/sbrdsp.asm",
+    "libavcodec/x86/sbrdsp_init.c"
+  ],
+  "arm": [
+    "libavcodec/aarch64/sbrdsp_neon.S",
+    "libavcodec/aarch64/sbrdsp_init_aarch64.c",
+    "libavcodec/arm/sbrdsp_neon.S",
+    "libavcodec/arm/sbrdsp_init_arm.c"
+  ],
+  "riscv": [
+    "libavcodec/riscv/sbrdsp_init.c"
+  ],
+  "headers": [
+    "libavcodec/sbrdsp.h",
+    "libavcodec/sbr.h"
+  ],
+  "makefiles": [],
+  "checkasm": [
+    "tests/checkasm/sbrdsp.c"
+  ],
+  "notes": "neg_odd_64 negates odd-indexed elements of a 64-element array. C scalar impl in sbrdsp_template.c (sbr_neg_odd_64_c), x86 SSE impl in sbrdsp.asm (cglobal sbr_neg_odd_64), AArch64/ARM NEON impl in respective sbrdsp_neon.S files. RISC-V only has the init stub with no RVV implementation yet — primary migration target."
+}
+```
+
+# FINAL SELECTED:
+[
+  "libavcodec/sbrdsp_template.c",
+  "libavcodec/sbrdsp.c",
+  "libavcodec/aacsbr_template.c",
+  "libavcodec/x86/sbrdsp.asm",
+  "libavcodec/x86/sbrdsp_init.c",
+  "libavcodec/aarch64/sbrdsp_neon.S",
+  "libavcodec/aarch64/sbrdsp_init_aarch64.c",
+  "libavcodec/arm/sbrdsp_neon.S",
+  "libavcodec/arm/sbrdsp_init_arm.c",
+  "libavcodec/riscv/sbrdsp_init.c",
+  "libavcodec/sbrdsp.h",
+  "libavcodec/sbr.h",
+  "tests/checkasm/sbrdsp.c",
+  "libavcodec/riscv/sbrdsp_rvv.S"
+]

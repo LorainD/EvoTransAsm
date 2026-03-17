@@ -1,0 +1,4 @@
+patching file libavcodec/riscv/Makefile
+patch unexpectedly ends in middle of line
+patch: **** malformed patch at line 8:  
+

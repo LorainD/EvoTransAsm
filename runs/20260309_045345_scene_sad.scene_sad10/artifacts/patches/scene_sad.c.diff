@@ -1,0 +1,23 @@
+--- a/libavfilter/scene_sad.c
++++ b/libavfilter/scene_sad.c
+@@ -1,3 +1,4 @@
++#include "config.h"
+@@
+ ff_scene_sad_fn ff_scene_sad_get_fn(int depth)
+ {
+     ff_scene_sad_fn sad = NULL;
+ #if ARCH_X86
+     sad = ff_scene_sad_get_fn_x86(depth);
+ #endif
++#if ARCH_RISCV
++    if (!sad)
++        sad = ff_scene_sad_get_fn_riscv(depth);
++#endif
+     if (!sad) {
+         if (depth <= 8)
+             sad = ff_scene_sad_c;
+         else if (depth <= 16)
+             sad = ff_scene_sad16_c;
+     }
+     return sad;
+ }

@@ -1,0 +1,10 @@
+{
+  "symbol": "sbrdsp.neg_odd_64",
+  "matches": [
+    {
+      "file": "tests/checkasm/sbrdsp.c",
+      "line": 271,
+      "text": "if (check_func(sbrdsp.neg_odd_64, \"neg_odd_64\"))"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+[
+  {
+    "target_path": "/home/yuhe/project/cmdTool/workplace/FFmpeg/libavcodec/h264pred.c",
+    "action": "inject",
+    "applied_at": "line:33",
+    "success": true
+  },
+  {
+    "target_path": "/home/yuhe/project/cmdTool/workplace/FFmpeg/libavcodec/h264pred.c",
+    "action": "inject",
+    "applied_at": "end",
+    "success": true
+  },
+  {
+    "target_path": "/home/yuhe/project/cmdTool/workplace/FFmpeg/libavcodec/riscv/h264pred_init.c",
+    "action": "create",
+    "applied_at": "new_file",
+    "success": true
+  },
+  {
+    "target_path": "/home/yuhe/project/cmdTool/workplace/FFmpeg/libavcodec/riscv/h264pred_rvv.S",
+    "action": "create",
+    "applied_at": "new_file",
+    "success": true
+  },
+  {
+    "target_path": "/home/yuhe/project/cmdTool/workplace/FFmpeg/libavcodec/riscv/Makefile",
+    "action": "inject",
+    "applied_at": "line:36",
+    "success": true
+  }
+]

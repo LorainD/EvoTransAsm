@@ -1,0 +1,58 @@
+*** a/src/libavcodec/riscv/synth_filter_rvv.S
+--- b/src/libavcodec/riscv/synth_filter_rvv.S
+@@
+-src/libavcodec/riscv/synth_filter_rvv.S:50: Error: illegal operands `mv s6,a9'
++/* Fix non-standard register aliases (a9, t7-t11) for GAS */
+@@
+-    mv s6,a9
++    /* a9 is not a standard RISC-V ABI register name; keep s6 as-is */
++    mv      s6, s6
+@@
+-    li t7,512
+-    sub t7,t7,t0
+-    li t8,0
++    li      s7, 512
++    sub     s7, s7, t0
++    li      s8, 0
+@@
+-    bge t8,t7,3f
++    bge     s8, s7, 3f
+@@
+-    add t9,t8,t3
+-    slli t9,t9,2
+-    add t9,s4,t9
+-    flw ft5,0(t9)
++    add     s9, s8, t3
++    slli    s9, s9, 2
++    add     s9, s4, s9
++    flw     ft5, 0(s9)
+@@
+-    li t10,15
+-    sub t10,t10,t3
+-    add t10,t10,t8
+-    slli t10,t10,2
+-    add t10,t2,t10
+-    flw ft6,0(t10)
++    li      s10, 15
++    sub     s10, s10, t3
++    add     s10, s10, s8
++    slli    s10, s10, 2
++    add     s10, t2, s10
++    flw     ft6, 0(s10)
+@@
+-    addi t11,t8,16
+-    add t11,t11,t3
+-    slli t11,t11,2
+-    add t11,s4,t11
+-    flw ft5,0(t11)
++    addi    s11, s8, 16
++    add     s11, s11, t3
++    slli    s11, s11, 2
++    add     s11, s4, s11
++    flw     ft5, 0(s11)
+@@
+-    add t10,t8,t3
+-    slli t10,t10,2
++    add     s10, s8, t3
++    slli    s10, s10, 2
+***

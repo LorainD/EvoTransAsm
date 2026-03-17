@@ -1,0 +1,419 @@
+--- libavcodec/h264pred.c (head) ---
+/*
+ * H.26L/H.264/AVC/JVT/14496-10/... encoder/decoder
+ * Copyright (c) 2003 Michael Niedermayer <michaelni@gmx.at>
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+/**
+ * @file
+ * H.264 / AVC / MPEG-4 part10 prediction functions.
+ * @author Michael Niedermayer <michaelni@gmx.at>
+ */
+
+#include "config.h"
+#include "libavutil/attributes.h"
+#include "libavutil/avassert.h"
+#include "libavutil/intreadwrite.h"
+#include "codec_id.h"
+#include "h264pred.h"
+#include "mathops.h"
+
+#define BIT_DEPTH 8
+#include "h264pred_template.c"
+#undef BIT_DEPTH
+
+#define BIT_DEPTH 9
+
+--- libavcodec/h264_mb.c (head) ---
+/*
+ * H.26L/H.264/AVC/JVT/14496-10/... decoder
+ * Copyright (c) 2003 Michael Niedermayer <michaelni@gmx.at>
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+/**
+ * @file
+ * H.264 / AVC / MPEG-4 part10 macroblock decoding
+ */
+
+#include <stdint.h>
+
+#include "config.h"
+
+#include "libavutil/common.h"
+#include "libavutil/intreadwrite.h"
+#include "avcodec.h"
+#include "h264dec.h"
+#include "h264_ps.h"
+#include "qpeldsp.h"
+#include "rectangle.h"
+#include "threadframe.h"
+
+static inline int get_lowest_part_list_y(H264SliceContext *sl,
+
+--- libavcodec/x86/h264_intrapred.asm (head) ---
+;******************************************************************************
+;* H.264 intra prediction asm optimizations
+;* Copyright (c) 2010 Fiona Glaser
+;* Copyright (c) 2010 Holger Lubitz
+;* Copyright (c) 2010 Loren Merritt
+;* Copyright (c) 2010 Ronald S. Bultje
+;*
+;* This file is part of FFmpeg.
+;*
+;* FFmpeg is free software; you can redistribute it and/or
+;* modify it under the terms of the GNU Lesser General Public
+;* License as published by the Free Software Foundation; either
+;* version 2.1 of the License, or (at your option) any later version.
+;*
+;* FFmpeg is distributed in the hope that it will be useful,
+;* but WITHOUT ANY WARRANTY; without even the implied warranty of
+;* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+;* Lesser General Public License for more details.
+;*
+;* You should have received a copy of the GNU Lesser General Public
+;* License along with FFmpeg; if not, write to the Free Software
+;* Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+;******************************************************************************
+
+%include "libavutil/x86/x86util.asm"
+
+SECTION_RODATA
+
+tm_shuf: times 8 db 0x03, 0x80
+pw_ff00: times 8 dw 0xff00
+plane_shuf:  db -8, -7, -6, -5, -4, -3, -2, -1
+             db  1,  2,  3,  4,  5,  6,  7,  8
+plane8_shuf: db -4, -3, -2, -1,  0,  0,  0,  0
+             db  1,  2,  3,  4,  0,  0,  0,  0
+pw_0to7:     dw  0,  1,  2,  3,  4,  5,  6,  7
+pw_1to8:     dw  1,  2,  3,  4,  5,  6,  7,  8
+pw_m8tom1:   dw -8, -7, -6, -5, -4, -3, -2, -1
+pw_m4to4:    dw -4, -3, -2, -1,  1,  2,  3,  4
+
+SECTION .text
+
+--- libavcodec/x86/h264_intrapred_10bit.asm (head) ---
+;*****************************************************************************
+;* MMX/SSE2/AVX-optimized 10-bit H.264 intra prediction code
+;*****************************************************************************
+;* Copyright (C) 2005-2011 x264 project
+;*
+;* Authors: Daniel Kang <daniel.d.kang@gmail.com>
+;*
+;* This file is part of FFmpeg.
+;*
+;* FFmpeg is free software; you can redistribute it and/or
+;* modify it under the terms of the GNU Lesser General Public
+;* License as published by the Free Software Foundation; either
+;* version 2.1 of the License, or (at your option) any later version.
+;*
+;* FFmpeg is distributed in the hope that it will be useful,
+;* but WITHOUT ANY WARRANTY; without even the implied warranty of
+;* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+;* Lesser General Public License for more details.
+;*
+;* You should have received a copy of the GNU Lesser General Public
+;* License along with FFmpeg; if not, write to the Free Software
+;* Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+;******************************************************************************
+
+%include "libavutil/x86/x86util.asm"
+
+SECTION_RODATA
+
+cextern pw_1023
+%define pw_pixel_max pw_1023
+cextern pw_512
+cextern pw_16
+cextern pw_8
+cextern pw_4
+cextern pw_2
+cextern pw_1
+cextern pd_16
+
+pw_m32101234: dw -3, -2, -1, 0, 1, 2, 3, 4
+pw_m3:        times 8 dw -3
+
+--- libavcodec/x86/h264_intrapred_init.c (head) ---
+/*
+ * Copyright (c) 2010 Fiona Glaser <fiona@x264.com>
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+#include <stddef.h>
+#include <stdint.h>
+#include "config.h"
+#include "libavutil/attributes.h"
+#include "libavutil/cpu.h"
+#include "libavutil/x86/cpu.h"
+#include "libavcodec/codec_id.h"
+#include "libavcodec/h264pred.h"
+
+#define PRED4x4(TYPE, DEPTH, OPT) \
+void ff_pred4x4_ ## TYPE ## _ ## DEPTH ## _ ## OPT (uint8_t *src, \
+                                                    const uint8_t *topright, \
+                                                    ptrdiff_t stride);
+
+PRED4x4(dc, 10, mmxext)
+PRED4x4(down_left, 10, sse2)
+PRED4x4(down_left, 10, avx)
+PRED4x4(down_right, 10, sse2)
+PRED4x4(down_right, 10, ssse3)
+PRED4x4(down_right, 10, avx)
+
+--- libavcodec/arm/h264pred_neon.S (head) ---
+/*
+ * Copyright (c) 2009 Mans Rullgard <mans@mansr.com>
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+#include "libavutil/arm/asm.S"
+
+        .macro ldcol.8  rd,  rs,  rt,  n=8,  hi=0
+.if \n == 8 || \hi == 0
+        vld1.8          {\rd[0]}, [\rs], \rt
+        vld1.8          {\rd[1]}, [\rs], \rt
+        vld1.8          {\rd[2]}, [\rs], \rt
+        vld1.8          {\rd[3]}, [\rs], \rt
+.endif
+.if \n == 8 || \hi == 1
+        vld1.8          {\rd[4]}, [\rs], \rt
+        vld1.8          {\rd[5]}, [\rs], \rt
+        vld1.8          {\rd[6]}, [\rs], \rt
+        vld1.8          {\rd[7]}, [\rs], \rt
+.endif
+        .endm
+
+        .macro add16x8  dq,  dl,  dh,  rl,  rh
+        vaddl.u8        \dq, \rl, \rh
+        vadd.u16        \dl, \dl, \dh
+
+--- libavcodec/arm/h264pred_init_arm.c (head) ---
+/*
+ * Copyright (c) 2009 Mans Rullgard <mans@mansr.com>
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+#include <stdint.h>
+
+#include "libavutil/attributes.h"
+#include "libavutil/arm/cpu.h"
+#include "libavcodec/avcodec.h"
+#include "libavcodec/h264pred.h"
+
+void ff_pred16x16_vert_neon(uint8_t *src, ptrdiff_t stride);
+void ff_pred16x16_hor_neon(uint8_t *src, ptrdiff_t stride);
+void ff_pred16x16_plane_neon(uint8_t *src, ptrdiff_t stride);
+void ff_pred16x16_dc_neon(uint8_t *src, ptrdiff_t stride);
+void ff_pred16x16_128_dc_neon(uint8_t *src, ptrdiff_t stride);
+void ff_pred16x16_left_dc_neon(uint8_t *src, ptrdiff_t stride);
+void ff_pred16x16_top_dc_neon(uint8_t *src, ptrdiff_t stride);
+
+void ff_pred8x8_vert_neon(uint8_t *src, ptrdiff_t stride);
+void ff_pred8x8_hor_neon(uint8_t *src, ptrdiff_t stride);
+void ff_pred8x8_plane_neon(uint8_t *src, ptrdiff_t stride);
+void ff_pred8x8_dc_neon(uint8_t *src, ptrdiff_t stride);
+void ff_pred8x8_128_dc_neon(uint8_t *src, ptrdiff_t stride);
+
+--- libavcodec/h264pred.h (head) ---
+/*
+ * H.26L/H.264/AVC/JVT/14496-10/... encoder/decoder
+ * Copyright (c) 2003 Michael Niedermayer <michaelni@gmx.at>
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+/**
+ * @file
+ * H.264 / AVC / MPEG-4 prediction functions.
+ * @author Michael Niedermayer <michaelni@gmx.at>
+ */
+
+#ifndef AVCODEC_H264PRED_H
+#define AVCODEC_H264PRED_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+/**
+ * Prediction types
+ */
+//@{
+#define VERT_PRED              0
+#define HOR_PRED               1
+#define DC_PRED                2
+
+--- tests/checkasm/h264pred.c (head) ---
+/*
+ * Copyright (c) 2015 Henrik Gramner
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with FFmpeg; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
+#include <string.h>
+#include "checkasm.h"
+#include "libavcodec/codec_id.h"
+#include "libavcodec/h264pred.h"
+#include "libavutil/common.h"
+#include "libavutil/internal.h"
+#include "libavutil/intreadwrite.h"
+#include "libavutil/mem_internal.h"
+
+static const int codec_ids[4] = { AV_CODEC_ID_H264, AV_CODEC_ID_VP8, AV_CODEC_ID_RV40, AV_CODEC_ID_SVQ3 };
+
+static const char * const pred4x4_modes[4][15] = {
+    { /* H.264 */
+        [VERT_PRED           ] = "vertical",
+        [HOR_PRED            ] = "horizontal",
+        [DC_PRED             ] = "dc",
+        [DIAG_DOWN_LEFT_PRED ] = "down_left",
+        [DIAG_DOWN_RIGHT_PRED] = "down_right",
+        [VERT_RIGHT_PRED     ] = "vertical_right",
+        [HOR_DOWN_PRED       ] = "horizontal_right",
+
+--- tests/checkasm/checkasm.c (head) ---
+/*
+ * Assembly testing and benchmarking tool
+ * Copyright (c) 2015 Henrik Gramner
+ * Copyright (c) 2008 Loren Merritt
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with FFmpeg; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Copyright © 2018, VideoLAN and dav1d authors
+ * Copyright © 2018, Two Orioles, LLC
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ *    list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES

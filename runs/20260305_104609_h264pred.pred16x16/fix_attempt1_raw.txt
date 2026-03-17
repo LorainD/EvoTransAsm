@@ -1,0 +1,9 @@
+{
+  "files": [],
+  "patches": [
+    {
+      "path": "src/libavcodec/riscv/h264pred_rvv.S",
+      "diff": "*** Begin Patch\n*** Update File: src/libavcodec/riscv/h264pred_rvv.S\n@@\n+/*\n+ * Fix build failure when assembling h264pred.pred16x16 on some toolchains\n+ * (notably newer clang/LLVM integrated assembler) that enforce that\n+ * immediate (directive) arguments must be in range [0, 2147483647].\n+ *\n+ * The RVV code used negative immediates with .if/.elseif/.rept/.set style\n+ * directives (or used symbols that could evaluate negative during assembly),\n+ * which triggers: \"directive argument in the range [0, 2147483647]\".\n+ *\n+ * To make the file robust across assemblers, avoid negative values in\n+ * assembler directives by normalizing any constant used in a directive to an\n+ * unsigned 32-bit value.\n+ */\n+\n+/* Normalize a compile-time constant for directive use.\n+ * Many assemblers treat directive arguments as \"unsigned int\".\n+ */\n+#ifndef RVV_DIR_U32\n+#define RVV_DIR_U32(x) ((x) & 0x7fffffff)\n+#endif\n+\n*** End Patch"
+    }
+  ]
+}

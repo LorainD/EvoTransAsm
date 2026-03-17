@@ -1,0 +1,37 @@
+/*
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+
+#ifndef AVFILTER_SCENE_SAD_H
+#define AVFILTER_SCENE_SAD_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+typedef void (*ff_scene_sad_fn)(const uint8_t *p1, ptrdiff_t stride1,
+                               const uint8_t *p2, ptrdiff_t stride2,
+                               ptrdiff_t width, ptrdiff_t height,
+                               uint64_t *sum);
+
+ff_scene_sad_fn ff_scene_sad_get_fn(int depth);
+
+/* Arch-specific dispatchers */
+#if ARCH_RISCV
+ff_scene_sad_fn ff_scene_sad_get_fn_riscv(int depth);
+#endif
+
+#endif /* AVFILTER_SCENE_SAD_H */

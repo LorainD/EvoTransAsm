@@ -1,0 +1,26 @@
+{
+  "symbol": "sbrdsp.qmf_deint_bfly",
+  "datatype": "float32",
+  "vectorizable": true,
+  "pattern": [
+    "butterfly",
+    "stride_load",
+    "tail"
+  ],
+  "has_stride": false,
+  "has_saturation": false,
+  "reduction": false,
+  "tail_required": true,
+  "math_expression": "for i in 0..63: v[2*i+0] = src0[i] + src1[i]; v[2*i+1] = src0[i] - src1[i]  // (qmf deinterleave + butterfly sum/diff)",
+  "c_candidates": [
+    "libavcodec/sbrdsp_template.c:~36 (sbr_qmf_deint_bfly_c)"
+  ],
+  "x86_refs": [
+    "libavcodec/x86/sbrdsp_init.c:~33 (ff_sbr_qmf_deint_bfly_sse2 decl; implementation in x86/sbrdsp.asm)"
+  ],
+  "arm_refs": [
+    "libavcodec/arm/sbrdsp_init_arm.c:~28 (ff_sbr_qmf_deint_bfly_neon decl; implementation in arm/sbrdsp_neon.S)",
+    "libavcodec/aarch64/sbrdsp_init_aarch64.c:~26 (ff_sbr_qmf_deint_bfly_neon decl; implementation in aarch64/sbrdsp_neon.S)"
+  ],
+  "notes": "INTFLOAT in this configuration maps to float (USE_FIXED=0), so datatype is float32. Operation is a classic butterfly (sum/diff) producing interleaved output v with length 128 from two 64-length inputs. Fixed trip count (64), but RVV implementation should still handle arbitrary VL hence tail handling is required. No saturation, no reduction. Inputs are contiguous; output is contiguous but written with stride-2 pattern (interleaving), which maps well to RVV segmented store (vsseg2e32) or two stores with strided indices."
+}

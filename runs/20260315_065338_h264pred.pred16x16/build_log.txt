@@ -1,0 +1,78 @@
+
+=== make (rc=2) ===
+orbiscomment.c:103:62: note: directive argument in the range [0, 2147483647]
+src/libavformat/vorbiscomment.c:103:13: note: 'snprintf' output between 4 and 11 bytes into a destination of size 4
+src/libavformat/vorbiscomment.c:104:58: note: directive argument in the range [-59, 59]
+src/libavformat/vorbiscomment.c:104:58: note: directive argument in the range [-999, 999]
+src/libavformat/vorbiscomment.c:104:13: note: 'snprintf' output between 13 and 21 bytes into a destination of size 13
+src/libavformat/smoothstreamingenc.c:512:9: note: 'snprintf' output between 6 and 1029 bytes into a destination of size 1024
+src/libavformat/smoothstreamingenc.c:540:13: note: 'snprintf' output between 6 and 1029 bytes into a destination of size 1024
+src/libavformat/smoothstreamingenc.c:547:9: note: 'snprintf' output 18 or more bytes (assuming 1041) into a destination of size 1024
+src/libavformat/smoothstreamingenc.c:548:9: note: 'snprintf' output 15 or more bytes (assuming 1038) into a destination of size 1024
+src/libavformat/dashenc.c:1830:13: note: 'snprintf' output between 1 and 2047 bytes into a destination of size 1024
+src/libavformat/dashenc.c:1830:13: note: 'snprintf' output between 1 and 2047 bytes into a destination of size 1024
+src/libavformat/dashenc.c:359:46: note: directive argument in the range [0, 2147483647]
+src/libavformat/dashenc.c:359:9: note: 'snprintf' output between 13 and 1045 bytes into a destination of size 1024
+src/libavformat/dashenc.c:2127:9: note: 'snprintf' output between 1 and 2047 bytes into a destination of size 1024
+src/libavformat/matroskaenc.c:3346:17: note: 'snprintf' output between 19 and 333 bytes into a destination of size 20
+src/libavformat/rtsp.c:1634:9: note: 'snprintf' output between 14 and 4109 bytes into a destination of size 4096
+CC	libavcodec/h265_profile_level.o
+CC	libavcodec/h274.o
+CC	libavcodec/hap.o
+CC	libavcodec/hapdec.o
+CC	libavcodec/hashtable.o
+CC	libavcodec/hcadec.o
+CC	libavcodec/hcom.o
+CC	libavcodec/hdr_parser.o
+CC	libavcodec/hdrdec.o
+CC	libavcodec/hdrenc.o
+CC	libavcodec/hevc/cabac.o
+CC	libavcodec/hevc/data.o
+CC	libavcodec/hevc/dsp.o
+CC	libavcodec/hevc/filter.o
+CC	libavcodec/hevc/hevcdec.o
+CC	libavcodec/hevc/mvs.o
+CC	libavcodec/hevc/parse.o
+CC	libavcodec/hevc/parser.o
+CC	libavcodec/hevc/pred.o
+CC	libavcodec/hevc/ps.o
+CC	libavcodec/hevc/refs.o
+CC	libavcodec/hevc/sei.o
+CC	libavcodec/hnm4video.o
+CC	libavcodec/hpeldsp.o
+CC	libavcodec/hq_common.o
+CC	libavcodec/hq_hqa.o
+CC	libavcodec/hq_hqadsp.o
+CC	libavcodec/hqx.o
+CC	libavcodec/hqxdsp.o
+CC	libavcodec/htmlsubtitles.o
+CC	libavcodec/huffman.o
+src/libavcodec/h264pred.c:607:5: warning: data definition has no type or storage class
+  607 |     ff_h264_pred_init_riscv(h, codec_id, bit_depth, chroma_format_idc);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~
+CC	libavcodec/huffyuv.o
+src/libavcodec/h264pred.c:607:5: error: type defaults to 'int' in declaration of 'ff_h264_pred_init_riscv' [-Wimplicit-int]
+src/libavcodec/h264pred.c:607:5: error: parameter names (without types) in function declaration [-Wdeclaration-missing-parameter-type]
+src/libavcodec/h264pred.c:607:5: error: conflicting types for 'ff_h264_pred_init_riscv'; have 'int()'
+src/libavcodec/h264pred.c:36:6: note: previous declaration of 'ff_h264_pred_init_riscv' with type 'void(H264PredContext *, int,  int,  int)'
+   36 | void ff_h264_pred_init_riscv(H264PredContext *h, int codec_id, int bit_depth, int chroma_format_idc);
+      |      ^~~~~~~~~~~~~~~~~~~~~~~
+CC	libavcodec/huffyuvdec.o
+CC	libavcodec/huffyuvdsp.o
+CC	libavcodec/huffyuvenc.o
+CC	libavcodec/huffyuvencdsp.o
+CC	libavcodec/idcinvideo.o
+CC	libavcodec/idctdsp.o
+CC	libavcodec/iff.o
+CC	libavcodec/ilbcdec.o
+CC	libavcodec/imc.o
+CC	libavcodec/imgconvert.o
+CC	libavcodec/imm4.o
+CC	libavcodec/imm5.o
+CC	libavcodec/imx.o
+CC	libavcodec/indeo2.o
+CC	libavcodec/indeo3.o
+CC	libavcodec/indeo4.o
+CC	libavcodec/indeo5.o
+make: *** [/home/yuhe/project/cmdTool/workplace/FFmpeg/ffbuild/common.mak:90: libavcodec/h264pred.o] Error 1
+make: *** Waiting for unfinished jobs....

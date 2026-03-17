@@ -1,0 +1,9 @@
+[
+  {
+    "target_path": "/home/yuhe/project/cmdTool/workplace/FFmpeg/libavcodec/riscv/h264pred_rvv.S",
+    "action": "append",
+    "applied_at": "skipped_duplicate",
+    "success": true,
+    "error": ""
+  }
+]

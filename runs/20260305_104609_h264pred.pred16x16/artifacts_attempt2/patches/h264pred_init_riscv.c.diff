@@ -1,0 +1,35 @@
+*** Begin Patch
+*** Update File: src/libavcodec/riscv/h264pred_init_riscv.c
+@@
+-#include "config.h"
+-
+-#include "libavutil/attributes.h"
+-#include "libavutil/cpu.h"
+-
+-#include "libavcodec/h264pred.h"
++#include "config.h"
++
++#include "libavutil/attributes.h"
++#include "libavutil/cpu.h"
++
++#include "libavcodec/h264pred.h"
++#include "libavcodec/riscv/h264pred.h"
++
++/*
++ * Some trees/versions may not expose AV_CPU_FLAG_RVV in libavutil/cpu.h.
++ * Provide a safe fallback so this file can compile across configurations.
++ */
++#ifndef AV_CPU_FLAG_RVV
++#define AV_CPU_FLAG_RVV 0
++#endif
+@@
+ av_cold void ff_h264_pred_init_riscv(H264PredContext *h, int codec_id,
+                                     int bit_depth, const int chroma_format_idc)
+ {
+     int flags = av_get_cpu_flags();
+ 
+     if (bit_depth == 8 && (flags & AV_CPU_FLAG_RVV)) {
+         ff_h264_pred_init_riscv_rvv(h, codec_id, bit_depth, chroma_format_idc);
+     }
+ }
+*** End Patch

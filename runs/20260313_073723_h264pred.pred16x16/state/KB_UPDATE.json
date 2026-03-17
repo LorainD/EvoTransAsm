@@ -1,0 +1,9 @@
+{
+  "new_patterns": [
+    {
+      "pattern_id": "h264pred.pred16x16_20260313_073723",
+      "symbol": "h264pred.pred16x16"
+    }
+  ],
+  "new_errors": []
+}

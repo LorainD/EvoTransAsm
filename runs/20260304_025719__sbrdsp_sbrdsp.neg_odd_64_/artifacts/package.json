@@ -1,0 +1,9 @@
+{
+  "files": [
+    {
+      "path": "libavcodec/riscv/迁移sbrdsp模块的sbrdsp.neg_odd_64算子_rvv.S",
+      "content": "/* TODO: auto-generated placeholder (LLM disabled). */\n.text\n.align 2\n.globl 迁移sbrdsp模块的sbrdsp.neg_odd_64算子\n.type 迁移sbrdsp模块的sbrdsp.neg_odd_64算子, @function\n迁移sbrdsp模块的sbrdsp.neg_odd_64算子:\n\tret\n"
+    }
+  ],
+  "patches": []
+}

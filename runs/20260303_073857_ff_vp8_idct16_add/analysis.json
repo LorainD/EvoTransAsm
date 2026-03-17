@@ -1,0 +1,15 @@
+{
+  "symbol": "ff_vp8_idct16_add",
+  "datatype": "unknown",
+  "vectorizable": true,
+  "pattern": [],
+  "has_stride": false,
+  "has_saturation": false,
+  "reduction": false,
+  "tail_required": false,
+  "math_expression": "unknown",
+  "c_candidates": [],
+  "x86_refs": [],
+  "arm_refs": [],
+  "notes": "LLM 未运行或解析失败，使用 fallback。"
+}

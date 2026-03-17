@@ -1,0 +1,855 @@
+{
+  "symbol": "h264pred.pred16x16",
+  "matches": [
+    {
+      "file": "libavcodec/svq3.c",
+      "line": 661,
+      "text": "s->hpc.pred16x16[s->intra16x16_pred_mode](dest_y, linesize);"
+    },
+    {
+      "file": "libavcodec/vp8.c",
+      "line": 473,
+      "text": "s->prob->pred16x16[i] = vp89_rac_get_uint(c, 8);"
+    },
+    {
+      "file": "libavcodec/vp8.c",
+      "line": 615,
+      "text": "memcpy(s->prob->pred16x16, vp8_pred16x16_prob_inter,"
+    },
+    {
+      "file": "libavcodec/vp8.c",
+      "line": 616,
+      "text": "sizeof(s->prob->pred16x16));"
+    },
+    {
+      "file": "libavcodec/vp8.c",
+      "line": 782,
+      "text": "memcpy(s->prob->pred16x16, vp8_pred16x16_prob_inter,"
+    },
+    {
+      "file": "libavcodec/vp8.c",
+      "line": 783,
+      "text": "sizeof(s->prob->pred16x16));"
+    },
+    {
+      "file": "libavcodec/vp8.c",
+      "line": 1331,
+      "text": "s->prob->pred16x16);"
+    },
+    {
+      "file": "libavcodec/vp8.c",
+      "line": 1705,
+      "text": "s->hpc.pred16x16[mode](dst[0], s->linesize);"
+    },
+    {
+      "file": "libavcodec/rv34.c",
+      "line": 1064,
+      "text": "r->h.pred16x16[itype](dst, s->linesize);"
+    },
+    {
+      "file": "libavcodec/h264pred.c",
+      "line": 515,
+      "text": "h->pred16x16[DC_PRED8x8     ]= FUNCC(pred16x16_dc                     , depth);\\"
+    },
+    {
+      "file": "libavcodec/h264pred.c",
+      "line": 516,
+      "text": "h->pred16x16[VERT_PRED8x8   ]= FUNCC(pred16x16_vertical               , depth);\\"
+    },
+    {
+      "file": "libavcodec/h264pred.c",
+      "line": 517,
+      "text": "h->pred16x16[HOR_PRED8x8    ]= FUNCC(pred16x16_horizontal             , depth);\\"
+    },
+    {
+      "file": "libavcodec/h264pred.c",
+      "line": 518,
+      "text": "h->pred16x16[PLANE_PRED8x8  ]= FUNCC(pred16x16_plane                  , depth);\\"
+    },
+    {
+      "file": "libavcodec/h264pred.c",
+      "line": 519,
+      "text": "h->pred16x16[LEFT_DC_PRED8x8]= FUNCC(pred16x16_left_dc                , depth);\\"
+    },
+    {
+      "file": "libavcodec/h264pred.c",
+      "line": 520,
+      "text": "h->pred16x16[TOP_DC_PRED8x8 ]= FUNCC(pred16x16_top_dc                 , depth);\\"
+    },
+    {
+      "file": "libavcodec/h264pred.c",
+      "line": 521,
+      "text": "h->pred16x16[DC_128_PRED8x8 ]= FUNCC(pred16x16_128_dc                 , depth);\\"
+    },
+    {
+      "file": "libavcodec/h264pred.c",
+      "line": 559,
+      "text": "h->pred16x16[PLANE_PRED8x8    ] = FUNCD(pred16x16_plane_svq3);"
+    },
+    {
+      "file": "libavcodec/h264pred.c",
+      "line": 568,
+      "text": "h->pred16x16[PLANE_PRED8x8    ] = FUNCD(pred16x16_plane_rv40);"
+    },
+    {
+      "file": "libavcodec/h264pred.c",
+      "line": 583,
+      "text": "h->pred16x16[PLANE_PRED8x8 ] = FUNCD(pred16x16_tm_vp8);"
+    },
+    {
+      "file": "libavcodec/h264pred.c",
+      "line": 584,
+      "text": "h->pred16x16[DC_127_PRED8x8] = FUNCC(pred16x16_127_dc, 8);"
+    },
+    {
+      "file": "libavcodec/h264pred.c",
+      "line": 585,
+      "text": "h->pred16x16[DC_129_PRED8x8] = FUNCC(pred16x16_129_dc, 8);"
+    },
+    {
+      "file": "libavcodec/vaapi_vp8.c",
+      "line": 114,
+      "text": "pp.y_mode_probs[i] = s->prob->pred16x16[i];"
+    },
+    {
+      "file": "libavcodec/h264pred.h",
+      "line": 100,
+      "text": "void(*pred16x16[4 + 3 + 2])(uint8_t *src, ptrdiff_t stride);"
+    },
+    {
+      "file": "libavcodec/vp8.h",
+      "line": 289,
+      "text": "uint8_t pred16x16[4];"
+    },
+    {
+      "file": "libavcodec/h264_mb.c",
+      "line": 705,
+      "text": "h->hpc.pred16x16[sl->intra16x16_pred_mode](dest_y, linesize);"
+    },
+    {
+      "file": "libavcodec/loongarch/h264intrapred.S",
+      "line": 195,
+      "text": "/* void ff_h264_pred16x16_plane_h264_8_lsx(uint8_t *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/loongarch/h264intrapred.S",
+      "line": 197,
+      "text": "function ff_h264_pred16x16_plane_h264_8_lsx"
+    },
+    {
+      "file": "libavcodec/loongarch/h264intrapred.S",
+      "line": 212,
+      "text": "/* void ff_h264_pred16x16_plane_rv40_8_lsx(uint8_t *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/loongarch/h264intrapred.S",
+      "line": 214,
+      "text": "function ff_h264_pred16x16_plane_rv40_8_lsx"
+    },
+    {
+      "file": "libavcodec/loongarch/h264intrapred.S",
+      "line": 227,
+      "text": "/* void ff_h264_pred16x16_plane_svq3_8_lsx(uint8_t *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/loongarch/h264intrapred.S",
+      "line": 229,
+      "text": "function ff_h264_pred16x16_plane_svq3_8_lsx"
+    },
+    {
+      "file": "libavcodec/loongarch/h264intrapred.S",
+      "line": 248,
+      "text": "/* void ff_h264_pred16x16_plane_h264_8_lasx(uint8_t *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/loongarch/h264intrapred.S",
+      "line": 250,
+      "text": "function ff_h264_pred16x16_plane_h264_8_lasx"
+    },
+    {
+      "file": "libavcodec/loongarch/h264intrapred.S",
+      "line": 265,
+      "text": "/* void ff_h264_pred16x16_plane_rv40_8_lasx(uint8_t *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/loongarch/h264intrapred.S",
+      "line": 267,
+      "text": "function ff_h264_pred16x16_plane_rv40_8_lasx"
+    },
+    {
+      "file": "libavcodec/loongarch/h264intrapred.S",
+      "line": 280,
+      "text": "/* void ff_h264_pred16x16_plane_svq3_8_lasx(uint8_t *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/loongarch/h264intrapred.S",
+      "line": 282,
+      "text": "function ff_h264_pred16x16_plane_svq3_8_lasx"
+    },
+    {
+      "file": "libavcodec/loongarch/h264_intrapred_init_loongarch.c",
+      "line": 41,
+      "text": "h->pred16x16[PLANE_PRED8x8] = ff_h264_pred16x16_plane_svq3_8_lsx;"
+    },
+    {
+      "file": "libavcodec/loongarch/h264_intrapred_init_loongarch.c",
+      "line": 43,
+      "text": "h->pred16x16[PLANE_PRED8x8] = ff_h264_pred16x16_plane_rv40_8_lsx;"
+    },
+    {
+      "file": "libavcodec/loongarch/h264_intrapred_init_loongarch.c",
+      "line": 45,
+      "text": "h->pred16x16[PLANE_PRED8x8] = ff_h264_pred16x16_plane_h264_8_lsx;"
+    },
+    {
+      "file": "libavcodec/loongarch/h264_intrapred_init_loongarch.c",
+      "line": 57,
+      "text": "h->pred16x16[PLANE_PRED8x8] = ff_h264_pred16x16_plane_svq3_8_lasx;"
+    },
+    {
+      "file": "libavcodec/loongarch/h264_intrapred_init_loongarch.c",
+      "line": 59,
+      "text": "h->pred16x16[PLANE_PRED8x8] = ff_h264_pred16x16_plane_rv40_8_lasx;"
+    },
+    {
+      "file": "libavcodec/loongarch/h264_intrapred_init_loongarch.c",
+      "line": 61,
+      "text": "h->pred16x16[PLANE_PRED8x8] = ff_h264_pred16x16_plane_h264_8_lasx;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred.asm",
+      "line": 48,
+      "text": "; void ff_pred16x16_vertical_8(uint8_t *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred.asm",
+      "line": 52,
+      "text": "cglobal pred16x16_vertical_8, 2,3"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred.asm",
+      "line": 68,
+      "text": "; void ff_pred16x16_horizontal_8(uint8_t *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred.asm",
+      "line": 72,
+      "text": "cglobal pred16x16_horizontal_8, 2,3"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred.asm",
+      "line": 105,
+      "text": "; void ff_pred16x16_dc_8(uint8_t *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred.asm",
+      "line": 109,
+      "text": "cglobal pred16x16_dc_8, 2,7"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred.asm",
+      "line": 156,
+      "text": "; void ff_pred16x16_tm_vp8_8(uint8_t *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred.asm",
+      "line": 160,
+      "text": "cglobal pred16x16_tm_vp8_8, 2,6,6"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred.asm",
+      "line": 197,
+      "text": "cglobal pred16x16_tm_vp8_8, 2, 4, 5, dst, stride, stride3, iteration"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred.asm",
+      "line": 233,
+      "text": "; void ff_pred16x16_plane_*_8(uint8_t *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred.asm",
+      "line": 237,
+      "text": "cglobal pred16x16_plane_%1_8, 2,9,7"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 202,
+      "text": "h->pred16x16[VERT_PRED8x8] = ff_pred16x16_vertical_8_sse;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 206,
+      "text": "h->pred16x16[HOR_PRED8x8          ] = ff_pred16x16_horizontal_8_sse2;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 207,
+      "text": "h->pred16x16[DC_PRED8x8           ] = ff_pred16x16_dc_8_sse2;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 216,
+      "text": "h->pred16x16[PLANE_PRED8x8    ] = ff_pred16x16_tm_vp8_8_sse2;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 222,
+      "text": "h->pred16x16[PLANE_PRED8x8] = ff_pred16x16_plane_svq3_8_sse2;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 224,
+      "text": "h->pred16x16[PLANE_PRED8x8] = ff_pred16x16_plane_rv40_8_sse2;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 226,
+      "text": "h->pred16x16[PLANE_PRED8x8] = ff_pred16x16_plane_h264_8_sse2;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 232,
+      "text": "h->pred16x16[HOR_PRED8x8          ] = ff_pred16x16_horizontal_8_ssse3;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 233,
+      "text": "h->pred16x16[DC_PRED8x8           ] = ff_pred16x16_dc_8_ssse3;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 253,
+      "text": "h->pred16x16[PLANE_PRED8x8] = ff_pred16x16_plane_svq3_8_ssse3;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 255,
+      "text": "h->pred16x16[PLANE_PRED8x8] = ff_pred16x16_plane_rv40_8_ssse3;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 257,
+      "text": "h->pred16x16[PLANE_PRED8x8] = ff_pred16x16_plane_h264_8_ssse3;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 264,
+      "text": "h->pred16x16[PLANE_PRED8x8    ] = ff_pred16x16_tm_vp8_8_avx2;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 297,
+      "text": "h->pred16x16[DC_PRED8x8        ] = ff_pred16x16_dc_10_sse2;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 298,
+      "text": "h->pred16x16[TOP_DC_PRED8x8    ] = ff_pred16x16_top_dc_10_sse2;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 299,
+      "text": "h->pred16x16[DC_128_PRED8x8    ] = ff_pred16x16_128_dc_10_sse2;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 300,
+      "text": "h->pred16x16[LEFT_DC_PRED8x8   ] = ff_pred16x16_left_dc_10_sse2;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 301,
+      "text": "h->pred16x16[VERT_PRED8x8      ] = ff_pred16x16_vertical_10_sse2;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 302,
+      "text": "h->pred16x16[HOR_PRED8x8       ] = ff_pred16x16_horizontal_10_sse2;"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_10bit.asm",
+      "line": 978,
+      "text": "; void ff_pred16x16_vertical_10(pixel *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_10bit.asm",
+      "line": 986,
+      "text": "cglobal pred16x16_vertical_10, 2, 3"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_10bit.asm",
+      "line": 1000,
+      "text": "; void ff_pred16x16_horizontal_10(pixel *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_10bit.asm",
+      "line": 1003,
+      "text": "cglobal pred16x16_horizontal_10, 2, 3"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_10bit.asm",
+      "line": 1018,
+      "text": "; void ff_pred16x16_dc_10(pixel *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_10bit.asm",
+      "line": 1021,
+      "text": "cglobal pred16x16_dc_10, 2, 6"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_10bit.asm",
+      "line": 1054,
+      "text": "; void ff_pred16x16_top_dc_10(pixel *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_10bit.asm",
+      "line": 1057,
+      "text": "cglobal pred16x16_top_dc_10, 2, 3"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_10bit.asm",
+      "line": 1076,
+      "text": "; void ff_pred16x16_left_dc_10(pixel *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_10bit.asm",
+      "line": 1079,
+      "text": "cglobal pred16x16_left_dc_10, 2, 6"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_10bit.asm",
+      "line": 1107,
+      "text": "; void ff_pred16x16_128_dc_10(pixel *src, ptrdiff_t stride)"
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_10bit.asm",
+      "line": 1110,
+      "text": "cglobal pred16x16_128_dc_10, 2,3"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_init.c",
+      "line": 89,
+      "text": "h->pred16x16[DC_PRED8x8     ] = ff_pred16x16_dc_neon;"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_init.c",
+      "line": 90,
+      "text": "h->pred16x16[VERT_PRED8x8   ] = ff_pred16x16_vert_neon;"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_init.c",
+      "line": 91,
+      "text": "h->pred16x16[HOR_PRED8x8    ] = ff_pred16x16_hor_neon;"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_init.c",
+      "line": 92,
+      "text": "h->pred16x16[LEFT_DC_PRED8x8] = ff_pred16x16_left_dc_neon;"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_init.c",
+      "line": 93,
+      "text": "h->pred16x16[TOP_DC_PRED8x8 ] = ff_pred16x16_top_dc_neon;"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_init.c",
+      "line": 94,
+      "text": "h->pred16x16[DC_128_PRED8x8 ] = ff_pred16x16_128_dc_neon;"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_init.c",
+      "line": 97,
+      "text": "h->pred16x16[PLANE_PRED8x8  ] = ff_pred16x16_plane_neon;"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_init.c",
+      "line": 118,
+      "text": "h->pred16x16[DC_PRED8x8     ] = ff_pred16x16_dc_neon_10;"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_init.c",
+      "line": 119,
+      "text": "h->pred16x16[VERT_PRED8x8   ] = ff_pred16x16_vert_neon_10;"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_init.c",
+      "line": 120,
+      "text": "h->pred16x16[HOR_PRED8x8    ] = ff_pred16x16_hor_neon_10;"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_init.c",
+      "line": 121,
+      "text": "h->pred16x16[TOP_DC_PRED8x8 ] = ff_pred16x16_top_dc_neon_10;"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_init.c",
+      "line": 124,
+      "text": "h->pred16x16[PLANE_PRED8x8  ] = ff_pred16x16_plane_neon_10;"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 48,
+      "text": "function ff_pred16x16_128_dc_neon, export=1"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 50,
+      "text": "b               .L_pred16x16_dc_end"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 53,
+      "text": "function ff_pred16x16_top_dc_neon, export=1"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 59,
+      "text": "b               .L_pred16x16_dc_end"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 62,
+      "text": "function ff_pred16x16_left_dc_neon, export=1"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 68,
+      "text": "b               .L_pred16x16_dc_end"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 71,
+      "text": "function ff_pred16x16_dc_neon, export=1"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 81,
+      "text": ".L_pred16x16_dc_end:"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 90,
+      "text": "function ff_pred16x16_hor_neon, export=1"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 100,
+      "text": "function ff_pred16x16_vert_neon, export=1"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 112,
+      "text": "function ff_pred16x16_plane_neon, export=1"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 380,
+      "text": "function ff_pred16x16_128_dc_neon_10, export=1"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 383,
+      "text": "b               .L_pred16x16_dc_10_end"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 387,
+      "text": "function ff_pred16x16_top_dc_neon_10, export=1"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 397,
+      "text": "b               .L_pred16x16_dc_10_end"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 402,
+      "text": "function ff_pred16x16_left_dc_neon_10, export=1"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 412,
+      "text": "b               .L_pred16x16_dc_10_end"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 416,
+      "text": "function ff_pred16x16_dc_neon_10, export=1"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 431,
+      "text": ".L_pred16x16_dc_10_end:"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 441,
+      "text": "function ff_pred16x16_hor_neon_10, export=1"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 454,
+      "text": "function ff_pred16x16_vert_neon_10, export=1"
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_neon.S",
+      "line": 469,
+      "text": "function ff_pred16x16_plane_neon_10, export=1"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_init_arm.c",
+      "line": 76,
+      "text": "h->pred16x16[DC_PRED8x8     ] = ff_pred16x16_dc_neon;"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_init_arm.c",
+      "line": 77,
+      "text": "h->pred16x16[VERT_PRED8x8   ] = ff_pred16x16_vert_neon;"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_init_arm.c",
+      "line": 78,
+      "text": "h->pred16x16[HOR_PRED8x8    ] = ff_pred16x16_hor_neon;"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_init_arm.c",
+      "line": 79,
+      "text": "h->pred16x16[LEFT_DC_PRED8x8] = ff_pred16x16_left_dc_neon;"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_init_arm.c",
+      "line": 80,
+      "text": "h->pred16x16[TOP_DC_PRED8x8 ] = ff_pred16x16_top_dc_neon;"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_init_arm.c",
+      "line": 81,
+      "text": "h->pred16x16[DC_128_PRED8x8 ] = ff_pred16x16_128_dc_neon;"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_init_arm.c",
+      "line": 84,
+      "text": "h->pred16x16[PLANE_PRED8x8  ] = ff_pred16x16_plane_neon;"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_neon.S",
+      "line": 45,
+      "text": "function ff_pred16x16_128_dc_neon, export=1"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_neon.S",
+      "line": 47,
+      "text": "b               .L_pred16x16_dc_end"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_neon.S",
+      "line": 50,
+      "text": "function ff_pred16x16_top_dc_neon, export=1"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_neon.S",
+      "line": 56,
+      "text": "b               .L_pred16x16_dc_end"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_neon.S",
+      "line": 59,
+      "text": "function ff_pred16x16_left_dc_neon, export=1"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_neon.S",
+      "line": 66,
+      "text": "b               .L_pred16x16_dc_end"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_neon.S",
+      "line": 69,
+      "text": "function ff_pred16x16_dc_neon, export=1"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_neon.S",
+      "line": 83,
+      "text": ".L_pred16x16_dc_end:"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_neon.S",
+      "line": 92,
+      "text": "function ff_pred16x16_hor_neon, export=1"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_neon.S",
+      "line": 102,
+      "text": "function ff_pred16x16_vert_neon, export=1"
+    },
+    {
+      "file": "libavcodec/arm/h264pred_neon.S",
+      "line": 113,
+      "text": "function ff_pred16x16_plane_neon, export=1"
+    },
+    {
+      "file": "libavcodec/mips/h264pred_init_mips.c",
+      "line": 44,
+      "text": "h->pred16x16[DC_PRED8x8             ] = ff_pred16x16_dc_8_mmi;"
+    },
+    {
+      "file": "libavcodec/mips/h264pred_init_mips.c",
+      "line": 45,
+      "text": "h->pred16x16[VERT_PRED8x8           ] = ff_pred16x16_vertical_8_mmi;"
+    },
+    {
+      "file": "libavcodec/mips/h264pred_init_mips.c",
+      "line": 46,
+      "text": "h->pred16x16[HOR_PRED8x8            ] = ff_pred16x16_horizontal_8_mmi;"
+    },
+    {
+      "file": "libavcodec/mips/h264pred_init_mips.c",
+      "line": 53,
+      "text": "h->pred16x16[PLANE_PRED8x8      ] = ff_pred16x16_plane_svq3_8_mmi;"
+    },
+    {
+      "file": "libavcodec/mips/h264pred_init_mips.c",
+      "line": 56,
+      "text": "h->pred16x16[PLANE_PRED8x8      ] = ff_pred16x16_plane_rv40_8_mmi;"
+    },
+    {
+      "file": "libavcodec/mips/h264pred_init_mips.c",
+      "line": 62,
+      "text": "h->pred16x16[PLANE_PRED8x8      ] = ff_pred16x16_plane_h264_8_mmi;"
+    },
+    {
+      "file": "libavcodec/mips/h264pred_init_mips.c",
+      "line": 116,
+      "text": "h->pred16x16[DC_PRED8x8] = ff_h264_intra_pred_dc_16x16_msa;"
+    },
+    {
+      "file": "libavcodec/mips/h264pred_init_mips.c",
+      "line": 117,
+      "text": "h->pred16x16[VERT_PRED8x8] = ff_h264_intra_pred_vert_16x16_msa;"
+    },
+    {
+      "file": "libavcodec/mips/h264pred_init_mips.c",
+      "line": 118,
+      "text": "h->pred16x16[HOR_PRED8x8] = ff_h264_intra_pred_horiz_16x16_msa;"
+    },
+    {
+      "file": "libavcodec/mips/h264pred_init_mips.c",
+      "line": 126,
+      "text": "h->pred16x16[7] = ff_vp8_pred16x16_127_dc_8_msa;"
+    },
+    {
+      "file": "libavcodec/mips/h264pred_init_mips.c",
+      "line": 127,
+      "text": "h->pred16x16[8] = ff_vp8_pred16x16_129_dc_8_msa;"
+    },
+    {
+      "file": "libavcodec/mips/h264pred_init_mips.c",
+      "line": 130,
+      "text": "h->pred16x16[PLANE_PRED8x8] ="
+    },
+    {
+      "file": "libavcodec/mips/h264pred_init_mips.c",
+      "line": 135,
+      "text": "h->pred16x16[LEFT_DC_PRED8x8] = ff_h264_intra_pred_dc_left_16x16_msa;"
+    },
+    {
+      "file": "libavcodec/mips/h264pred_init_mips.c",
+      "line": 136,
+      "text": "h->pred16x16[TOP_DC_PRED8x8] = ff_h264_intra_pred_dc_top_16x16_msa;"
+    },
+    {
+      "file": "libavcodec/mips/h264pred_init_mips.c",
+      "line": 137,
+      "text": "h->pred16x16[DC_128_PRED8x8] = ff_h264_intra_pred_dc_128_16x16_msa;"
+    },
+    {
+      "file": "tests/checkasm/h264pred.c",
+      "line": 190,
+      "text": "if (check_pred_func(h->pred16x16[pred_mode], \"16x16\", pred16x16_modes[codec][pred_mode])) {"
+    },
+    {
+      "file": "tests/checkasm/h264pred.c",
+      "line": 241,
+      "text": "{ check_pred16x16, \"pred16x16\" },"
+    },
+    {
+      "file": "libavcodec/h264_parse.c",
+      "line": 24,
+      "text": "#include \"h264pred.h\""
+    },
+    {
+      "file": "libavcodec/svq3.c",
+      "line": 56,
+      "text": "#include \"h264pred.h\""
+    },
+    {
+      "file": "libavcodec/vp8data.h",
+      "line": 31,
+      "text": "#include \"h264pred.h\""
+    },
+    {
+      "file": "libavcodec/rv34.h",
+      "line": 36,
+      "text": "#include \"h264pred.h\""
+    },
+    {
+      "file": "libavcodec/h264pred.c",
+      "line": 33,
+      "text": "#include \"h264pred.h\""
+    },
+    {
+      "file": "libavcodec/h264dec.h",
+      "line": 41,
+      "text": "#include \"h264pred.h\""
+    },
+    {
+      "file": "libavcodec/vp8.h",
+      "line": 35,
+      "text": "#include \"h264pred.h\""
+    },
+    {
+      "file": "libavcodec/vp9dsp_template.c",
+      "line": 31,
+      "text": "// back with h264pred.[ch]"
+    },
+    {
+      "file": "libavcodec/loongarch/h264_intrapred_init_loongarch.c",
+      "line": 23,
+      "text": "#include \"libavcodec/h264pred.h\""
+    },
+    {
+      "file": "libavcodec/x86/h264_intrapred_init.c",
+      "line": 28,
+      "text": "#include \"libavcodec/h264pred.h\""
+    },
+    {
+      "file": "libavcodec/aarch64/h264pred_init.c",
+      "line": 26,
+      "text": "#include \"libavcodec/h264pred.h\""
+    },
+    {
+      "file": "libavcodec/arm/h264pred_init_arm.c",
+      "line": 26,
+      "text": "#include \"libavcodec/h264pred.h\""
+    },
+    {
+      "file": "libavcodec/mips/h264pred_mmi.c",
+      "line": 2,
+      "text": "* Loongson SIMD optimized h264pred"
+    },
+    {
+      "file": "libavcodec/mips/h264pred_mips.h",
+      "line": 25,
+      "text": "#include \"libavcodec/h264pred.h\""
+    },
+    {
+      "file": "tests/checkasm/checkasm.c",
+      "line": 179,
+      "text": "{ \"h264pred\", checkasm_check_h264pred },"
+    },
+    {
+      "file": "tests/checkasm/h264pred.c",
+      "line": 24,
+      "text": "#include \"libavcodec/h264pred.h\""
+    }
+  ]
+}

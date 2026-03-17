@@ -1,0 +1,157 @@
+AR	libavfilter/libavfilter.a
+AS	libavcodec/riscv/synth_filter.synth_filter_rvv.o
+CC	libavcodec/riscv/synth_filter_init.o
+CC	libavcodec/rl.o
+AR	libavformat/libavformat.a
+CC	libavcodec/rl2.o
+CC	libavcodec/rle.o
+CC	libavcodec/roqaudioenc.o
+CC	libavcodec/roqvideo.o
+CC	libavcodec/roqvideodec.o
+CC	libavcodec/roqvideoenc.o
+CC	libavcodec/rpza.o
+CC	libavcodec/rpzaenc.o
+CC	libavcodec/rtjpeg.o
+CC	libavcodec/rtv1.o
+CC	libavcodec/rv10.o
+CC	libavcodec/rv10enc.o
+CC	libavcodec/rv20enc.o
+CC	libavcodec/rv30.o
+CC	libavcodec/rv30dsp.o
+CC	libavcodec/rv34_parser.o
+CC	libavcodec/rv34dsp.o
+CC	libavcodec/rv34.o
+CC	libavcodec/rv40.o
+CC	libavcodec/rv40dsp.o
+CC	libavcodec/rv60dec.o
+CC	libavcodec/rv60dsp.o
+CC	libavcodec/s302m.o
+CC	libavcodec/s302menc.o
+CC	libavcodec/samidec.o
+CC	libavcodec/sanm.o
+CC	libavcodec/sbc.o
+CC	libavcodec/sbc_parser.o
+CC	libavcodec/sbcdec.o
+CC	libavcodec/sbcdsp.o
+CC	libavcodec/sbcenc.o
+CC	libavcodec/sbrdsp.o
+CC	libavcodec/sbrdsp_fixed.o
+CC	libavcodec/scpr.o
+CC	libavcodec/sga.o
+CC	libavcodec/sgidec.o
+CC	libavcodec/sgirledec.o
+CC	libavcodec/sgienc.o
+CC	libavcodec/sheervideo.o
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S: Assembler messages:
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:3: Error: "+v": ISA string must begin with rv32, rv64 or Profiles
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:14: Error: ilp32d/lp64d ABI can't be used when d extension isn't supported
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:14: Error: unrecognized opcode `addi sp,sp,-64', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:15: Error: unrecognized opcode `sd ra,56(sp)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:16: Error: unrecognized opcode `sd s0,48(sp)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:17: Error: unrecognized opcode `sd s1,40(sp)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:18: Error: unrecognized opcode `sd s2,32(sp)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:19: Error: unrecognized opcode `sd s3,24(sp)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:20: Error: unrecognized opcode `sd s4,16(sp)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:21: Error: unrecognized opcode `sd s5,8(sp)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:24: Error: unrecognized opcode `mv s0,a1', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:25: Error: unrecognized opcode `mv s1,a2', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:26: Error: unrecognized opcode `mv s2,a3', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:27: Error: unrecognized opcode `mv s3,a4', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:28: Error: unrecognized opcode `mv s4,a5', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:31: Error: unrecognized opcode `lw t0,0(s1)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:32: Error: unrecognized opcode `slli t1,t0,2', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:33: Error: unrecognized opcode `add t2,s0,t1', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:35: Error: unrecognized opcode `mv a0,a0', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:36: Error: unrecognized opcode `mv a1,t2', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:37: Error: unrecognized opcode `mv a2,a6', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:38: Error: unrecognized opcode `li a3,4', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:39: Error: unrecognized opcode `jalr zero,a7,0', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:42: Error: unrecognized opcode `lw t0,0(s1)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:43: Error: unrecognized opcode `slli t1,t0,2', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:44: Error: unrecognized opcode `add s5,s0,t1', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:47: Error: unrecognized opcode `fmv.s f0,fa0', extension `f' or `zfinx' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:49: Error: unrecognized opcode `li t3,0', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:52: Error: unrecognized opcode `slli t4,t3,2', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:53: Error: unrecognized opcode `add t5,s2,t4', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:54: Error: unrecognized opcode `flw f1,0(t5)', extension `f' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:55: Error: unrecognized opcode `flw f2,64(t5)', extension `f' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:58: Error: unrecognized opcode `li t6,16', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:59: Error: unrecognized opcode `vsetivli zero,16,e32,m1,ta,ma', extension `v' or `zve64x' or `zve32x' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:62: Error: unrecognized opcode `slli t7,t3,6', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:63: Error: unrecognized opcode `add t8,s3,t7', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:64: Error: unrecognized opcode `vle32.v v0,(t8)', extension `v' or `zve64x' or `zve32x' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:67: Error: unrecognized opcode `addi t9,t8,1024', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:68: Error: unrecognized opcode `vle32.v v1,(t9)', extension `v' or `zve64x' or `zve32x' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:71: Error: unrecognized opcode `slli t10,t3,3', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:72: Error: unrecognized opcode `add t11,s5,t10', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:73: Error: unrecognized opcode `vle32.v v2,(t11)', extension `v' or `zve64x' or `zve32x' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:76: Error: unrecognized opcode `addi t12,t11,128', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:77: Error: unrecognized opcode `vle32.v v3,(t12)', extension `v' or `zve64x' or `zve32x' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:80: Error: unrecognized opcode `vfmul.vv v4,v2,v0', extension `v' or `zve64d' or `zve64f' or `zve32f' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:81: Error: unrecognized opcode `vfmacc.vv v4,v3,v1', extension `v' or `zve64d' or `zve64f' or `zve32f' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:84: Error: unrecognized opcode `vfmv.s.f f3,v4', extension `v' or `zve64d' or `zve64f' or `zve32f' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:85: Error: unrecognized opcode `vsetivli zero,8,e32,m1,ta,ma', extension `v' or `zve64x' or `zve32x' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:86: Error: unrecognized opcode `vslidedown.vi v5,v4,8', extension `v' or `zve64x' or `zve32x' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:87: Error: unrecognized opcode `vfmv.s.f f4,v5', extension `v' or `zve64d' or `zve64f' or `zve32f' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:88: Error: unrecognized opcode `fadd.s f3,f3,f4', extension `f' or `zfinx' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:90: Error: unrecognized opcode `vsetivli zero,4,e32,m1,ta,ma', extension `v' or `zve64x' or `zve32x' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:91: Error: unrecognized opcode `vslidedown.vi v5,v4,4', extension `v' or `zve64x' or `zve32x' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:92: Error: unrecognized opcode `vfmv.s.f f4,v5', extension `v' or `zve64d' or `zve64f' or `zve32f' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:93: Error: unrecognized opcode `fadd.s f3,f3,f4', extension `f' or `zfinx' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:95: Error: unrecognized opcode `vsetivli zero,2,e32,m1,ta,ma', extension `v' or `zve64x' or `zve32x' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:96: Error: unrecognized opcode `vslidedown.vi v5,v4,2', extension `v' or `zve64x' or `zve32x' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:97: Error: unrecognized opcode `vfmv.s.f f4,v5', extension `v' or `zve64d' or `zve64f' or `zve32f' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:98: Error: unrecognized opcode `fadd.s f3,f3,f4', extension `f' or `zfinx' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:100: Error: unrecognized opcode `vsetivli zero,1,e32,m1,ta,ma', extension `v' or `zve64x' or `zve32x' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:101: Error: unrecognized opcode `vslidedown.vi v5,v4,1', extension `v' or `zve64x' or `zve32x' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:102: Error: unrecognized opcode `vfmv.s.f f4,v5', extension `v' or `zve64d' or `zve64f' or `zve32f' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:103: Error: unrecognized opcode `fadd.s f3,f3,f4', extension `f' or `zfinx' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:107: Error: unrecognized opcode `fadd.s f5,f1,f3', extension `f' or `zfinx' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:108: Error: unrecognized opcode `fsub.s f6,f1,f3', extension `f' or `zfinx' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:109: Error: unrecognized opcode `fmul.s f5,f5,f0', extension `f' or `zfinx' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:110: Error: unrecognized opcode `fmul.s f6,f6,f0', extension `f' or `zfinx' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:112: Error: unrecognized opcode `add t13,s4,t4', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:113: Error: unrecognized opcode `fsw f5,0(t13)', extension `f' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:115: Error: unrecognized opcode `li t14,31', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:116: Error: unrecognized opcode `sub t14,t14,t3', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:117: Error: unrecognized opcode `slli t14,t14,2', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:118: Error: unrecognized opcode `add t15,s4,t14', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:119: Error: unrecognized opcode `fsw f6,0(t15)', extension `f' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:122: Error: unrecognized opcode `fsw f2,0(t5)', extension `f' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:123: Error: unrecognized opcode `fsw f3,64(t5)', extension `f' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:125: Error: unrecognized opcode `addi t3,t3,1', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:126: Error: unrecognized opcode `li t16,16', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:127: Error: unrecognized opcode `blt t3,t16,1b', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:130: Error: unrecognized opcode `lw t0,0(s1)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:131: Error: unrecognized opcode `addi t0,t0,-32', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:132: Error: unrecognized opcode `andi t0,t0,511', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:133: Error: unrecognized opcode `sw t0,0(s1)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:135: Error: unrecognized opcode `ld ra,56(sp)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:136: Error: unrecognized opcode `ld s0,48(sp)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:137: Error: unrecognized opcode `ld s1,40(sp)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:138: Error: unrecognized opcode `ld s2,32(sp)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:139: Error: unrecognized opcode `ld s3,24(sp)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:140: Error: unrecognized opcode `ld s4,16(sp)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:141: Error: unrecognized opcode `ld s5,8(sp)', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:142: Error: unrecognized opcode `addi sp,sp,64', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:143: Error: unrecognized opcode `ret', extension `i' required
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:148: Error: "+v": ISA string must begin with rv32, rv64 or Profiles
+src/libavcodec/riscv/synth_filter.synth_filter_rvv.S:168: Error: unrecognized opcode `ret', extension `i' required
+CC	libavcodec/simple_idct.o
+CC	libavcodec/sinewin.o
+CC	libavcodec/shorten.o
+CC	libavcodec/sipr.o
+CC	libavcodec/sipr16k.o
+make: *** [src/ffbuild/common.mak:102: libavcodec/riscv/synth_filter.synth_filter_rvv.o] Error 1
+make: *** Waiting for unfinished jobs....
+CC	libavcodec/sipr_parser.o
+CC	libavcodec/siren.o
+src/libavcodec/riscv/synth_filter_init.c:34:14: error: no previous prototype for 'ff_synth_filter_init_riscv' [-Werror=missing-prototypes]
+   34 | av_cold void ff_synth_filter_init_riscv(SynthFilterContext *s)
+      |              ^~~~~~~~~~~~~~~~~~~~~~~~~~
+src/libavcodec/riscv/synth_filter_init.c: In function 'ff_synth_filter_init_riscv':
+src/libavcodec/riscv/synth_filter_init.c:38:9: error: implicit declaration of function 'have_rvv' [-Wimplicit-function-declaration]
+   38 |     if (have_rvv(flags))
+      |         ^~~~~~~~
+cc1: some warnings being treated as errors
+make: *** [src/ffbuild/common.mak:90: libavcodec/riscv/synth_filter_init.o] Error 1

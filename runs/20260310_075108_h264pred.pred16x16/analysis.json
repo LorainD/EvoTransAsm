@@ -1,0 +1,32 @@
+{
+  "symbol": "h264pred.pred16x16",
+  "datatype": "uint8",
+  "vectorizable": true,
+  "pattern": [
+    "horizontal_add",
+    "stride_load",
+    "tail"
+  ],
+  "has_stride": true,
+  "has_saturation": false,
+  "reduction": true,
+  "tail_required": false,
+  "math_expression": "mode-specific intra 16x16 prediction writing a 16x16 block: for y in 0..15, x in 0..15: dst[y*stride+x] = f_mode(top[0..15], left[0..15], topleft, (optional) top_right); where f_mode includes cases: VERT: dst[y][x]=top[x]; HOR: dst[y][x]=left[y]; DC: dc=(sum(top)+sum(left)+16)>>5, dst[y][x]=dc; TOP_DC: dc=(sum(top)+8)>>4; LEFT_DC: dc=(sum(left)+8)>>4; 128_DC: dst[y][x]=128; PLANE: dst[y][x]=clip((a + b*(x-7) + c*(y-7) + 16)>>5) (bitdepth-dependent)",
+  "c_candidates": [
+    "libavcodec/h264pred.c:36-54",
+    "libavcodec/h264pred.c:515-521"
+  ],
+  "x86_refs": [
+    "libavcodec/x86/h264_intrapred.asm:48-60",
+    "libavcodec/x86/h264_intrapred_init.c:90-114",
+    "libavcodec/x86/h264_intrapred_init.c:201-259",
+    "libavcodec/x86/h264_intrapred_init.c:297-303"
+  ],
+  "arm_refs": [
+    "libavcodec/arm/h264pred_neon.S:45-57",
+    "libavcodec/arm/h264pred_neon.S:50-57",
+    "libavcodec/arm/h264pred_neon.S:59-60",
+    "libavcodec/arm/h264pred_init_arm.c:28-35"
+  ],
+  "notes": "pred16x16 is a function-pointer table (multiple modes) generated via h264pred_template.c for bit depths 8/9/10/12/14; core data is pixel (uint8 for 8-bit, uint16 for >8-bit) but this task targets h264pred.pred16x16 in the shown 8-bit context. Many modes are pure fills/replications (VERT/HOR/128_DC) and are trivially RVV-vectorizable with strided stores; DC/TOP_DC/LEFT_DC require horizontal sum reduction of 16 samples (use widening add then reduction). Tail handling not required for width=16, but RVV implementation should handle generic VL and unaligned addresses."
+}

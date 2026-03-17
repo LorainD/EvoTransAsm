@@ -1,0 +1,31 @@
+{
+  "analysis_json": {
+    "symbol": "h264pred.pred16x16",
+    "datatype": "mixed",
+    "vectorizable": true,
+    "pattern": [
+      "horizontal_add",
+      "stride_load",
+      "tail"
+    ],
+    "has_stride": true,
+    "has_saturation": false,
+    "reduction": true,
+    "tail_required": false,
+    "math_expression": "For 16x16 intra prediction modes (8-bit baseline):\nVERT: for y in 0..15: for x in 0..15: dst[y*stride+x] = top[x]\nHOR:  for y in 0..15: for x in 0..15: dst[y*stride+x] = left[y]\nDC:   s = sum_{i=0..15} top[i] + sum_{i=0..15} left[i]; dc = (s + 16) >> 5; for y,x: dst[y*stride+x]=dc\nTOP_DC:  s=sum_{i=0..15} top[i]; dc=(s+8)>>4; fill 16x16 with dc\nLEFT_DC: s=sum_{i=0..15} left[i]; dc=(s+8)>>4; fill 16x16 with dc\n128_DC: fill 16x16 with 128\nPLANE: compute H = sum_{i=1..8} i*(top[7+i]-top[7-i]); V = sum_{i=1..8} i*(left[7+i]-left[7-i]); a = 16*(left[15]+top[15]); b=(5*H+32)>>6; c=(5*V+32)>>6; for y,x: dst[y*stride+x] = clip( (a + b*(x-7) + c*(y-7) + 16) >> 5 )",
+    "c_candidates": [
+      "libavcodec/h264pred.c:515-521",
+      "libavcodec/h264pred_template.c:34-56"
+    ],
+    "x86_refs": [],
+    "arm_refs": [
+      "libavcodec/arm/h264pred_neon.S:45 ff_pred16x16_128_dc_neon",
+      "libavcodec/arm/h264pred_neon.S:50 ff_pred16x16_top_dc_neon",
+      "libavcodec/arm/h264pred_neon.S:59 ff_pred16x16_left_dc_neon",
+      "libavcodec/arm/h264pred_init_arm.c:76-85"
+    ],
+    "notes": "pred16x16 is a function-pointer table (multiple modes) initialized per bit_depth. For RVV, prioritize 8-bit NEON-referenced modes: dc/top_dc/left_dc/128_dc/vert/hor/plane. Core vector work: (1) sum reductions of 16 bytes (top/left) for DC variants; (2) store 16 bytes per row with stride; (3) plane uses weighted butterfly-like diffs to form H/V and then per-pixel affine ramp with final rounding shift; clipping/bitdepth saturation needed in plane (clip to [0, 2^bit_depth-1]) though not shown in provided context; tail not required since width is fixed 16."
+  },
+  "raw_text": "{\n  \"symbol\": \"h264pred.pred16x16\",\n  \"datatype\": \"mixed\",\n  \"vectorizable\": true,\n  \"pattern\": [\n    \"horizontal_add\",\n    \"stride_load\",\n    \"tail\"\n  ],\n  \"has_stride\": true,\n  \"has_saturation\": false,\n  \"reduction\": true,\n  \"tail_required\": false,\n  \"math_expression\": \"For 16x16 intra prediction modes (8-bit baseline):\\nVERT: for y in 0..15: for x in 0..15: dst[y*stride+x] = top[x]\\nHOR:  for y in 0..15: for x in 0..15: dst[y*stride+x] = left[y]\\nDC:   s = sum_{i=0..15} top[i] + sum_{i=0..15} left[i]; dc = (s + 16) >> 5; for y,x: dst[y*stride+x]=dc\\nTOP_DC:  s=sum_{i=0..15} top[i]; dc=(s+8)>>4; fill 16x16 with dc\\nLEFT_DC: s=sum_{i=0..15} left[i]; dc=(s+8)>>4; fill 16x16 with dc\\n128_DC: fill 16x16 with 128\\nPLANE: compute H = sum_{i=1..8} i*(top[7+i]-top[7-i]); V = sum_{i=1..8} i*(left[7+i]-left[7-i]); a = 16*(left[15]+top[15]); b=(5*H+32)>>6; c=(5*V+32)>>6; for y,x: dst[y*stride+x] = clip( (a + b*(x-7) + c*(y-7) + 16) >> 5 )\",\n  \"c_candidates\": [\n    \"libavcodec/h264pred.c:515-521\",\n    \"libavcodec/h264pred_template.c:34-56\"\n  ],\n  \"x86_refs\": [],\n  \"arm_refs\": [\n    \"libavcodec/arm/h264pred_neon.S:45 ff_pred16x16_128_dc_neon\",\n    \"libavcodec/arm/h264pred_neon.S:50 ff_pred16x16_top_dc_neon\",\n    \"libavcodec/arm/h264pred_neon.S:59 ff_pred16x16_left_dc_neon\",\n    \"libavcodec/arm/h264pred_init_arm.c:76-85\"\n  ],\n  \"notes\": \"pred16x16 is a function-pointer table (multiple modes) initialized per bit_depth. For RVV, prioritize 8-bit NEON-referenced modes: dc/top_dc/left_dc/128_dc/vert/hor/plane. Core vector work: (1) sum reductions of 16 bytes (top/left) for DC variants; (2) store 16 bytes per row with stride; (3) plane uses weighted butterfly-like diffs to form H/V and then per-pixel affine ramp with final rounding shift; clipping/bitdepth saturation needed in plane (clip to [0, 2^bit_depth-1]) though not shown in provided context; tail not required since width is fixed 16.\"\n}",
+  "llm_used": true
+}

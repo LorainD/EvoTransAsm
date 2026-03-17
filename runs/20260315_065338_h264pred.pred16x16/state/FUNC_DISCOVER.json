@@ -1,0 +1,251 @@
+{
+  "functions": [
+    {
+      "name": "pred16x16_dc_8_c",
+      "signature": "static void pred16x16_dc_8_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "16x16 DC 帧内预测：对参考边界像素求和/求平均后将同一值批量写入 16x16 块，典型的按行/按列循环写数组，适合用 RVV 做向量化填充与（可选）向量化求和；x86/ARM 通常都有对应的 intra pred SIMD 优化版本可参考。"
+    },
+    {
+      "name": "pred16x16_vertical_8_c",
+      "signature": "static void pred16x16_vertical_8_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "16x16 Vertical 预测：把 top 行的 16 个像素复制到后续 16 行（按行 memcpy/循环 store），是纯粹的大块数据搬运/广播写入，RVV 可用向量 load+重复 store；x86 SSE2/AVX、ARM NEON 一般有同类实现。"
+    },
+    {
+      "name": "pred16x16_horizontal_8_c",
+      "signature": "static void pred16x16_horizontal_8_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "16x16 Horizontal 预测：每行用对应的 left 像素做广播填充 16 个元素，属于按行的标量到向量广播+向量 store 模式，RVV 可用 vfmv/vmv.v.x 等广播后整行写入；x86/ARM 常见 SIMD 优化点。"
+    },
+    {
+      "name": "pred16x16_plane_8_c",
+      "signature": "static void pred16x16_plane_8_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "16x16 Plane 预测：对 top/left 做梯度计算（H、V）并生成二维平面，核心是循环内的加减乘、累加以及按像素生成并写回，存在明显数据并行；x86/ARM 通常都有 plane intrapred 的 SIMD 版本，适合迁移到 RVV。"
+    },
+    {
+      "name": "pred16x16_left_dc_8_c",
+      "signature": "static void pred16x16_left_dc_8_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "16x16 Left-DC：仅基于左边界求 DC 值并填充 16x16，包含对 16 个 left 像素求和与块填充两类可向量化热点（reduction + vector store），适合 RVV；x86/ARM 多有对应 SIMD。"
+    },
+    {
+      "name": "pred16x16_top_dc_8_c",
+      "signature": "static void pred16x16_top_dc_8_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "16x16 Top-DC：仅基于上边界求 DC 值并填充 16x16，top 的 16 元素求和/平均与 256 像素写回均适合用 RVV 向量化；x86/ARM 通常有 SIMD intrapred 参考实现。"
+    },
+    {
+      "name": "pred16x16_128_dc_8_c",
+      "signature": "static void pred16x16_128_dc_8_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "16x16 DC_128：整块填充常数（8-bit 为 128），是纯向量化 memset/store 场景，RVV 可一次写多个像素并循环按行推进；x86/ARM 常用 SIMD 快速填充。"
+    },
+    {
+      "name": "pred16x16_dc_9_c",
+      "signature": "static void pred16x16_dc_9_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "与 8-bit 同类：16x16 DC 预测包含边界像素求和/平均与 16x16 写回，可用 RVV 做 reduction 与向量化写入；并可参考 x86/ARM 的 intra pred SIMD 版本。"
+    },
+    {
+      "name": "pred16x16_vertical_9_c",
+      "signature": "static void pred16x16_vertical_9_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "与 8-bit 同类：top 行 16 像素复制到 16 行，属于可直接向量 load/store 的规律内存操作，适合 RVV。"
+    },
+    {
+      "name": "pred16x16_horizontal_9_c",
+      "signature": "static void pred16x16_horizontal_9_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "与 8-bit 同类：逐行把 left 值广播填充 16 像素，适合 RVV 的广播+向量 store。"
+    },
+    {
+      "name": "pred16x16_plane_9_c",
+      "signature": "static void pred16x16_plane_9_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "与 8-bit 同类：plane 预测为大量逐像素的线性计算与写回（加减乘、clip），数据并行度高，适合 RVV；x86/ARM 有成熟 SIMD 参考。"
+    },
+    {
+      "name": "pred16x16_left_dc_9_c",
+      "signature": "static void pred16x16_left_dc_9_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "与 8-bit 同类：基于 left 边界的求和/平均（reduction）+整块填充（vector store），适合 RVV。"
+    },
+    {
+      "name": "pred16x16_top_dc_9_c",
+      "signature": "static void pred16x16_top_dc_9_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "与 8-bit 同类：基于 top 边界求和/平均并填充，适合 RVV reduction 与向量化写回。"
+    },
+    {
+      "name": "pred16x16_128_dc_9_c",
+      "signature": "static void pred16x16_128_dc_9_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "与 8-bit 同类：整块常数填充（常数随 bit depth 调整），典型向量化 store 场景，适合 RVV。"
+    },
+    {
+      "name": "pred16x16_dc_10_c",
+      "signature": "static void pred16x16_dc_10_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "10-bit 版本仍是 DC 求和/平均 + 16x16 写回，通常以 16-bit 元素计算/存储（通过模板 pixel 类型），RVV 可用 e16 向量做 reduction 与批量写入；可对照 x86/ARM 高位深 intrapred SIMD。"
+    },
+    {
+      "name": "pred16x16_vertical_10_c",
+      "signature": "static void pred16x16_vertical_10_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "10-bit 垂直预测是 16 个元素的行复制到 16 行，适合 RVV e16 load/store，访存模式规则。"
+    },
+    {
+      "name": "pred16x16_horizontal_10_c",
+      "signature": "static void pred16x16_horizontal_10_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "10-bit 水平预测为按行广播 left 值并写 16 个 16-bit 像素，RVV 可用标量到向量广播+store。"
+    },
+    {
+      "name": "pred16x16_plane_10_c",
+      "signature": "static void pred16x16_plane_10_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "10-bit plane 预测包含大量逐像素线性计算与裁剪写回，适合 RVV e16/e32 混合计算（梯度/乘法可能提升到更宽位宽），SIMD 迁移收益大。"
+    },
+    {
+      "name": "pred16x16_left_dc_10_c",
+      "signature": "static void pred16x16_left_dc_10_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "10-bit Left-DC：对 left 边界做求和/平均（可能用更宽累加）并填充 16x16（e16 store），RVV reduction+批量写回可加速。"
+    },
+    {
+      "name": "pred16x16_top_dc_10_c",
+      "signature": "static void pred16x16_top_dc_10_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "10-bit Top-DC：对 top 边界求和/平均并填充，适合 RVV reduction 与 e16 批量 store。"
+    },
+    {
+      "name": "pred16x16_128_dc_10_c",
+      "signature": "static void pred16x16_128_dc_10_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "10-bit DC_128（常数为 1<<(bit_depth-1)）：整块常数填充，可用 RVV e16 一次写多元素。"
+    },
+    {
+      "name": "pred16x16_dc_12_c",
+      "signature": "static void pred16x16_dc_12_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "12-bit DC 预测：边界像素求和/平均 + 16x16 填充，具备 reduction 与批量写入两类向量化机会，RVV e16 很合适；x86/ARM 高位深 intrapred SIMD 可作为参考。"
+    },
+    {
+      "name": "pred16x16_vertical_12_c",
+      "signature": "static void pred16x16_vertical_12_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "12-bit 垂直预测：规则的 16x16 行复制，适合 RVV e16 load/store。"
+    },
+    {
+      "name": "pred16x16_horizontal_12_c",
+      "signature": "static void pred16x16_horizontal_12_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "12-bit 水平预测：每行广播 left 值写 16 个像素，适合 RVV 广播+store。"
+    },
+    {
+      "name": "pred16x16_plane_12_c",
+      "signature": "static void pred16x16_plane_12_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "12-bit plane 预测：逐像素线性生成与裁剪写回，计算密集且数据并行度高，适合 RVV 向量化（必要时用更宽累加避免溢出）。"
+    },
+    {
+      "name": "pred16x16_left_dc_12_c",
+      "signature": "static void pred16x16_left_dc_12_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "12-bit Left-DC：left 边界 reduction + 常数填充 16x16，RVV reduction 与 e16 批量 store 直接受益。"
+    },
+    {
+      "name": "pred16x16_top_dc_12_c",
+      "signature": "static void pred16x16_top_dc_12_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "12-bit Top-DC：top 边界 reduction + 常数填充，适合 RVV。"
+    },
+    {
+      "name": "pred16x16_128_dc_12_c",
+      "signature": "static void pred16x16_128_dc_12_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "12-bit DC_128：整块写常数 (1<<(bit_depth-1))，典型向量化填充操作，适合 RVV e16 store。"
+    },
+    {
+      "name": "pred16x16_dc_14_c",
+      "signature": "static void pred16x16_dc_14_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "14-bit DC 预测同样是边界求和/平均 + 16x16 写回，具有 reduction 与批量 store 的向量化特征，RVV 可用 e16 并在累加时提升位宽。"
+    },
+    {
+      "name": "pred16x16_vertical_14_c",
+      "signature": "static void pred16x16_vertical_14_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "14-bit 垂直预测为规则行复制，RVV e16 load/store 可高效实现。"
+    },
+    {
+      "name": "pred16x16_horizontal_14_c",
+      "signature": "static void pred16x16_horizontal_14_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "14-bit 水平预测：每行广播 left 值填充 16 个像素，适合 RVV 广播+store。"
+    },
+    {
+      "name": "pred16x16_plane_14_c",
+      "signature": "static void pred16x16_plane_14_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "14-bit plane 预测包含二维平面生成的逐像素运算（加减乘、shift、clip）与写回，数据并行度高且是常见 SIMD 优化对象，适合迁移到 RVV。"
+    },
+    {
+      "name": "pred16x16_left_dc_14_c",
+      "signature": "static void pred16x16_left_dc_14_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "14-bit Left-DC：边界 reduction + 整块填充，适合 RVV reduction 与 e16 批量 store。"
+    },
+    {
+      "name": "pred16x16_top_dc_14_c",
+      "signature": "static void pred16x16_top_dc_14_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "14-bit Top-DC：边界 reduction + 常数填充，适合 RVV。"
+    },
+    {
+      "name": "pred16x16_128_dc_14_c",
+      "signature": "static void pred16x16_128_dc_14_c(uint8_t *src, ptrdiff_t stride)",
+      "file": "libavcodec/h264pred_template.c",
+      "line": 0,
+      "reason": "14-bit DC_128：整块常数写入，属于纯向量化 store 场景，适合 RVV e16。"
+    }
+  ],
+  "raw_text": "{\n  \"symbol\": \"h264pred.pred16x16\",\n  \"functions\": [\n    {\n      \"name\": \"pred16x16_dc_8_c\",\n      \"signature\": \"static void pred16x16_dc_8_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"16x16 DC 帧内预测：对参考边界像素求和/求平均后将同一值批量写入 16x16 块，典型的按行/按列循环写数组，适合用 RVV 做向量化填充与（可选）向量化求和；x86/ARM 通常都有对应的 intra pred SIMD 优化版本可参考。\"\n    },\n    {\n      \"name\": \"pred16x16_vertical_8_c\",\n      \"signature\": \"static void pred16x16_vertical_8_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"16x16 Vertical 预测：把 top 行的 16 个像素复制到后续 16 行（按行 memcpy/循环 store），是纯粹的大块数据搬运/广播写入，RVV 可用向量 load+重复 store；x86 SSE2/AVX、ARM NEON 一般有同类实现。\"\n    },\n    {\n      \"name\": \"pred16x16_horizontal_8_c\",\n      \"signature\": \"static void pred16x16_horizontal_8_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"16x16 Horizontal 预测：每行用对应的 left 像素做广播填充 16 个元素，属于按行的标量到向量广播+向量 store 模式，RVV 可用 vfmv/vmv.v.x 等广播后整行写入；x86/ARM 常见 SIMD 优化点。\"\n    },\n    {\n      \"name\": \"pred16x16_plane_8_c\",\n      \"signature\": \"static void pred16x16_plane_8_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"16x16 Plane 预测：对 top/left 做梯度计算（H、V）并生成二维平面，核心是循环内的加减乘、累加以及按像素生成并写回，存在明显数据并行；x86/ARM 通常都有 plane intrapred 的 SIMD 版本，适合迁移到 RVV。\"\n    },\n    {\n      \"name\": \"pred16x16_left_dc_8_c\",\n      \"signature\": \"static void pred16x16_left_dc_8_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"16x16 Left-DC：仅基于左边界求 DC 值并填充 16x16，包含对 16 个 left 像素求和与块填充两类可向量化热点（reduction + vector store），适合 RVV；x86/ARM 多有对应 SIMD。\"\n    },\n    {\n      \"name\": \"pred16x16_top_dc_8_c\",\n      \"signature\": \"static void pred16x16_top_dc_8_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"16x16 Top-DC：仅基于上边界求 DC 值并填充 16x16，top 的 16 元素求和/平均与 256 像素写回均适合用 RVV 向量化；x86/ARM 通常有 SIMD intrapred 参考实现。\"\n    },\n    {\n      \"name\": \"pred16x16_128_dc_8_c\",\n      \"signature\": \"static void pred16x16_128_dc_8_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"16x16 DC_128：整块填充常数（8-bit 为 128），是纯向量化 memset/store 场景，RVV 可一次写多个像素并循环按行推进；x86/ARM 常用 SIMD 快速填充。\"\n    },\n\n    {\n      \"name\": \"pred16x16_dc_9_c\",\n      \"signature\": \"static void pred16x16_dc_9_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"与 8-bit 同类：16x16 DC 预测包含边界像素求和/平均与 16x16 写回，可用 RVV 做 reduction 与向量化写入；并可参考 x86/ARM 的 intra pred SIMD 版本。\"\n    },\n    {\n      \"name\": \"pred16x16_vertical_9_c\",\n      \"signature\": \"static void pred16x16_vertical_9_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"与 8-bit 同类：top 行 16 像素复制到 16 行，属于可直接向量 load/store 的规律内存操作，适合 RVV。\"\n    },\n    {\n      \"name\": \"pred16x16_horizontal_9_c\",\n      \"signature\": \"static void pred16x16_horizontal_9_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"与 8-bit 同类：逐行把 left 值广播填充 16 像素，适合 RVV 的广播+向量 store。\"\n    },\n    {\n      \"name\": \"pred16x16_plane_9_c\",\n      \"signature\": \"static void pred16x16_plane_9_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"与 8-bit 同类：plane 预测为大量逐像素的线性计算与写回（加减乘、clip），数据并行度高，适合 RVV；x86/ARM 有成熟 SIMD 参考。\"\n    },\n    {\n      \"name\": \"pred16x16_left_dc_9_c\",\n      \"signature\": \"static void pred16x16_left_dc_9_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"与 8-bit 同类：基于 left 边界的求和/平均（reduction）+整块填充（vector store），适合 RVV。\"\n    },\n    {\n      \"name\": \"pred16x16_top_dc_9_c\",\n      \"signature\": \"static void pred16x16_top_dc_9_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"与 8-bit 同类：基于 top 边界求和/平均并填充，适合 RVV reduction 与向量化写回。\"\n    },\n    {\n      \"name\": \"pred16x16_128_dc_9_c\",\n      \"signature\": \"static void pred16x16_128_dc_9_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"与 8-bit 同类：整块常数填充（常数随 bit depth 调整），典型向量化 store 场景，适合 RVV。\"\n    },\n\n    {\n      \"name\": \"pred16x16_dc_10_c\",\n      \"signature\": \"static void pred16x16_dc_10_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"10-bit 版本仍是 DC 求和/平均 + 16x16 写回，通常以 16-bit 元素计算/存储（通过模板 pixel 类型），RVV 可用 e16 向量做 reduction 与批量写入；可对照 x86/ARM 高位深 intrapred SIMD。\"\n    },\n    {\n      \"name\": \"pred16x16_vertical_10_c\",\n      \"signature\": \"static void pred16x16_vertical_10_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"10-bit 垂直预测是 16 个元素的行复制到 16 行，适合 RVV e16 load/store，访存模式规则。\"\n    },\n    {\n      \"name\": \"pred16x16_horizontal_10_c\",\n      \"signature\": \"static void pred16x16_horizontal_10_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"10-bit 水平预测为按行广播 left 值并写 16 个 16-bit 像素，RVV 可用标量到向量广播+store。\"\n    },\n    {\n      \"name\": \"pred16x16_plane_10_c\",\n      \"signature\": \"static void pred16x16_plane_10_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"10-bit plane 预测包含大量逐像素线性计算与裁剪写回，适合 RVV e16/e32 混合计算（梯度/乘法可能提升到更宽位宽），SIMD 迁移收益大。\"\n    },\n    {\n      \"name\": \"pred16x16_left_dc_10_c\",\n      \"signature\": \"static void pred16x16_left_dc_10_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"10-bit Left-DC：对 left 边界做求和/平均（可能用更宽累加）并填充 16x16（e16 store），RVV reduction+批量写回可加速。\"\n    },\n    {\n      \"name\": \"pred16x16_top_dc_10_c\",\n      \"signature\": \"static void pred16x16_top_dc_10_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"10-bit Top-DC：对 top 边界求和/平均并填充，适合 RVV reduction 与 e16 批量 store。\"\n    },\n    {\n      \"name\": \"pred16x16_128_dc_10_c\",\n      \"signature\": \"static void pred16x16_128_dc_10_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"10-bit DC_128（常数为 1<<(bit_depth-1)）：整块常数填充，可用 RVV e16 一次写多元素。\"\n    },\n\n    {\n      \"name\": \"pred16x16_dc_12_c\",\n      \"signature\": \"static void pred16x16_dc_12_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"12-bit DC 预测：边界像素求和/平均 + 16x16 填充，具备 reduction 与批量写入两类向量化机会，RVV e16 很合适；x86/ARM 高位深 intrapred SIMD 可作为参考。\"\n    },\n    {\n      \"name\": \"pred16x16_vertical_12_c\",\n      \"signature\": \"static void pred16x16_vertical_12_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"12-bit 垂直预测：规则的 16x16 行复制，适合 RVV e16 load/store。\"\n    },\n    {\n      \"name\": \"pred16x16_horizontal_12_c\",\n      \"signature\": \"static void pred16x16_horizontal_12_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"12-bit 水平预测：每行广播 left 值写 16 个像素，适合 RVV 广播+store。\"\n    },\n    {\n      \"name\": \"pred16x16_plane_12_c\",\n      \"signature\": \"static void pred16x16_plane_12_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"12-bit plane 预测：逐像素线性生成与裁剪写回，计算密集且数据并行度高，适合 RVV 向量化（必要时用更宽累加避免溢出）。\"\n    },\n    {\n      \"name\": \"pred16x16_left_dc_12_c\",\n      \"signature\": \"static void pred16x16_left_dc_12_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"12-bit Left-DC：left 边界 reduction + 常数填充 16x16，RVV reduction 与 e16 批量 store 直接受益。\"\n    },\n    {\n      \"name\": \"pred16x16_top_dc_12_c\",\n      \"signature\": \"static void pred16x16_top_dc_12_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"12-bit Top-DC：top 边界 reduction + 常数填充，适合 RVV。\"\n    },\n    {\n      \"name\": \"pred16x16_128_dc_12_c\",\n      \"signature\": \"static void pred16x16_128_dc_12_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"12-bit DC_128：整块写常数 (1<<(bit_depth-1))，典型向量化填充操作，适合 RVV e16 store。\"\n    },\n\n    {\n      \"name\": \"pred16x16_dc_14_c\",\n      \"signature\": \"static void pred16x16_dc_14_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"14-bit DC 预测同样是边界求和/平均 + 16x16 写回，具有 reduction 与批量 store 的向量化特征，RVV 可用 e16 并在累加时提升位宽。\"\n    },\n    {\n      \"name\": \"pred16x16_vertical_14_c\",\n      \"signature\": \"static void pred16x16_vertical_14_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"14-bit 垂直预测为规则行复制，RVV e16 load/store 可高效实现。\"\n    },\n    {\n      \"name\": \"pred16x16_horizontal_14_c\",\n      \"signature\": \"static void pred16x16_horizontal_14_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"14-bit 水平预测：每行广播 left 值填充 16 个像素，适合 RVV 广播+store。\"\n    },\n    {\n      \"name\": \"pred16x16_plane_14_c\",\n      \"signature\": \"static void pred16x16_plane_14_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"14-bit plane 预测包含二维平面生成的逐像素运算（加减乘、shift、clip）与写回，数据并行度高且是常见 SIMD 优化对象，适合迁移到 RVV。\"\n    },\n    {\n      \"name\": \"pred16x16_left_dc_14_c\",\n      \"signature\": \"static void pred16x16_left_dc_14_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"14-bit Left-DC：边界 reduction + 整块填充，适合 RVV reduction 与 e16 批量 store。\"\n    },\n    {\n      \"name\": \"pred16x16_top_dc_14_c\",\n      \"signature\": \"static void pred16x16_top_dc_14_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"14-bit Top-DC：边界 reduction + 常数填充，适合 RVV。\"\n    },\n    {\n      \"name\": \"pred16x16_128_dc_14_c\",\n      \"signature\": \"static void pred16x16_128_dc_14_c(uint8_t *src, ptrdiff_t stride)\",\n      \"file\": \"libavcodec/h264pred_template.c\",\n      \"line\": 0,\n      \"reason\": \"14-bit DC_128：整块常数写入，属于纯向量化 store 场景，适合 RVV e16。\"\n    }\n  ],\n  \"notes\": \"从给定上下文可见 pred16x16 相关函数均由 libavcodec/h264pred_template.c 在不同 BIT_DEPTH(8/9/10/12/14) 下展开生成，并在 ff_h264_pred_init() 中填充到 H264PredContext.pred16x16[]。当前上下文未包含 h264pred_template.c 的具体定义位置，因此 line 无法从片段精确恢复，统一填 0。上述函数均为典型 H.264 16x16 帧内预测热点（大量规则循环的数组读写/算术），且在 x86/ARM 平台通常存在 SIMD intrapred 对应实现，因而适合迁移到 RVV。\"\n}",
+  "llm_used": true
+}

@@ -1,0 +1,50 @@
+{
+  "symbol": "sbrdsp.neg_odd_64",
+  "c": [
+    "libavcodec/sbrdsp_template.c",
+    "libavcodec/sbrdsp.c",
+    "libavcodec/sbrdsp_fixed.c",
+    "libavcodec/aacsbr_template.c"
+  ],
+  "x86": [
+    "libavcodec/x86/sbrdsp.asm",
+    "libavcodec/x86/sbrdsp_init.c"
+  ],
+  "arm": [
+    "libavcodec/arm/sbrdsp_neon.S",
+    "libavcodec/arm/sbrdsp_init_arm.c",
+    "libavcodec/aarch64/sbrdsp_neon.S",
+    "libavcodec/aarch64/sbrdsp_init_aarch64.c"
+  ],
+  "riscv": [
+    "libavcodec/riscv/sbrdsp_init.c"
+  ],
+  "headers": [
+    "libavcodec/sbrdsp.h"
+  ],
+  "makefiles": [],
+  "checkasm": [
+    "tests/checkasm/sbrdsp.c",
+    "tests/checkasm/checkasm.c"
+  ],
+  "notes": "neg_odd_64 为 SBRDSPContext 函数指针（见 sbrdsp.h），C 实现/赋值在 sbrdsp_template.c（sbr_neg_odd_64_c）并由 sbrdsp.c/sbrdsp_fixed.c 初始化；x86/ARM/AArch64 的 SIMD 实现在对应汇编文件（x86/sbrdsp.asm, arm/aarch64 的 sbrdsp_neon.S），*_init*.c 仅负责注册到 s->neg_odd_64。aacsbr_template.c 展示该回调的实际调用点。"
+}
+
+# FINAL SELECTED:
+[
+  "libavcodec/sbrdsp_template.c",
+  "libavcodec/sbrdsp.c",
+  "libavcodec/sbrdsp_fixed.c",
+  "libavcodec/aacsbr_template.c",
+  "libavcodec/x86/sbrdsp.asm",
+  "libavcodec/x86/sbrdsp_init.c",
+  "libavcodec/arm/sbrdsp_neon.S",
+  "libavcodec/arm/sbrdsp_init_arm.c",
+  "libavcodec/aarch64/sbrdsp_neon.S",
+  "libavcodec/aarch64/sbrdsp_init_aarch64.c",
+  "libavcodec/riscv/sbrdsp_init.c",
+  "libavcodec/sbrdsp.h",
+  "tests/checkasm/sbrdsp.c",
+  "tests/checkasm/checkasm.c",
+  "libavcodec/riscv/sbrdsp_rvv.S"
+]

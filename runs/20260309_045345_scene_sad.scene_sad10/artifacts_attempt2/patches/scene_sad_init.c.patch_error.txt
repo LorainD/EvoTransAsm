@@ -1,0 +1,2 @@
+patching file src/libavfilter/riscv/scene_sad_init.c
+patch: **** unexpected end of file in patch

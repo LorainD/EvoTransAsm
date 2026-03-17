@@ -1,0 +1,23 @@
+[
+  {
+    "target_path": "/home/yuhe/project/cmdTool/workplace/FFmpeg/libavcodec/riscv/h264pred_rvv.S",
+    "action": "create",
+    "applied_at": "new_file",
+    "success": true,
+    "error": ""
+  },
+  {
+    "target_path": "/home/yuhe/project/cmdTool/workplace/FFmpeg/libavcodec/riscv/h264pred_init.c",
+    "action": "create",
+    "applied_at": "new_file",
+    "success": true,
+    "error": ""
+  },
+  {
+    "target_path": "/home/yuhe/project/cmdTool/workplace/FFmpeg/libavcodec/riscv/Makefile",
+    "action": "append",
+    "applied_at": "line:36",
+    "success": true,
+    "error": ""
+  }
+]
