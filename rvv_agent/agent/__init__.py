@@ -12,7 +12,7 @@ report   — 运行报告落盘（write_report）
 search   — 源码搜索、参考文件检索、上下文构建
 """
 
-from .analyze import AnalysisResult, analyze_with_llm, discover_functions
+from .analyze import analyze_with_llm, discover_functions
 from .chat import run_chat
 from .debug import run_debug_handler
 from .intent import Intent, parse_intent
@@ -29,7 +29,7 @@ from .search import (
 
 __all__ = [
     # analyze
-    "AnalysisResult", "analyze_with_llm", "discover_functions",
+     "analyze_with_llm", "discover_functions",
     # chat
     "run_chat",
     # debug

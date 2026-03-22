@@ -78,6 +78,7 @@ class AnalysisArtifact:
     analysis_json: dict = field(default_factory=dict)
     raw_text: str = ""
     llm_used: bool = False
+    error: str | None = None
 
 
 @dataclass

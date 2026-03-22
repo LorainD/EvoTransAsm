@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .agent.chat import handle_analyze, handle_debug, handle_kb_update, handle_patch
-# from .agent.generate import fixed_plan
+from .agent.plan import fixed_plan
 from .agent.report import write_chat_report
 from .agent.search import build_context_from_files, select_references
 from .core.llm import get_trajectory_dict, record_trajectory_action, reset_trajectory
@@ -120,11 +120,10 @@ def _handle_plan_pipeline(task: TaskContext) -> TaskContext:
     plan = fixed_plan(symbol)
     print(f"[pipeline] Plan: {len(plan.steps)} steps")
 
-    artifact = PlanArtifact(
-        steps=plan.steps,
-        function_order=[symbol],
-        acceptance_criteria={"build_ok": True},
-    )
+    artifact = plan
+    if not artifact.function_order:
+        artifact.function_order = [symbol]
+    artifact.acceptance_criteria = {"build_ok": True}
     aid = task.save_artifact("PLAN", artifact)
     task.artifacts.plan_id = aid
     record_trajectory_action("plan", f"Fixed plan for {symbol}")

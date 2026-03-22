@@ -5,24 +5,19 @@
 """
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, field
-
 from ..core.config import AppConfig
 from ..core.llm import LlmError, LlmMessage, chat_completion
 from ..core.prompts import plan_prompt, system_prompt
+from ..core.task import PlanArtifact
 from ..core.util import extract_json_from_llm
 
-
-@dataclass
-class Plan:
-    steps: list[str] = field(default_factory=list)
-    function_order: list[str] = field(default_factory=list)  # 按依赖排序的函数迁移顺序
+# Backward-compatible alias: historical callers import Plan from this module.
+Plan = PlanArtifact
 
 
-def fixed_plan(symbol: str, functions: list[str] | None = None) -> Plan:
+def fixed_plan(symbol: str, functions: list[str] | None = None) -> PlanArtifact:
     """LLM 不可用时的硬编码兜底计划。"""
-    return Plan(
+    return PlanArtifact(
         steps=[
             f"意图解析：迁移 {symbol}",
             "定位 C 实现",
@@ -34,10 +29,11 @@ def fixed_plan(symbol: str, functions: list[str] | None = None) -> Plan:
             "生成 run 报告（轨迹、输入输出、命令、摘要）",
         ],
         function_order=functions or [symbol],
+        acceptance_criteria={"build_ok": True},
     )
 
 
-def llm_plan(cfg: AppConfig, symbol: str, functions: list[str] | None = None) -> Plan:
+def llm_plan(cfg: AppConfig, symbol: str, functions: list[str] | None = None) -> PlanArtifact:
     """调用 LLM 生成针对 symbol 的迁移计划，失败时回退到 fixed_plan。"""
     messages = [
         LlmMessage(role="system", content=system_prompt()),
@@ -56,9 +52,10 @@ def llm_plan(cfg: AppConfig, symbol: str, functions: list[str] | None = None) ->
         # Fallback: use discovered functions or symbol
         if not func_order:
             func_order = functions or [symbol]
-        return Plan(
+        return PlanArtifact(
             steps=[str(s).strip() for s in steps if str(s).strip()],
             function_order=func_order,
+            acceptance_criteria={"build_ok": True},
         )
     except (LlmError, Exception):
         return fixed_plan(symbol, functions)

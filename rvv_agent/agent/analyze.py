@@ -7,22 +7,16 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 
 from ..core.config import AppConfig
 from ..core.llm import LlmError, LlmMessage, chat_completion
 from ..core.prompts import analysis_prompt, function_discovery_prompt, system_prompt
-from ..core.task import FuncDiscoverArtifact, MigrationTarget
+from ..core.task import AnalysisArtifact, FuncDiscoverArtifact, MigrationTarget
 from ..core.util import extract_json_from_llm
 from .search import Discovery, build_llm_context, group_files
 
-
-@dataclass
-class AnalysisResult:
-    analysis: dict
-    raw_text: str
-    llm_used: bool
-    error: str | None = None
+# Backward-compatible alias: historical callers import AnalysisResult.
+# AnalysisResult = AnalysisArtifact
 
 
 def discover_functions(
@@ -89,7 +83,7 @@ def analyze_with_llm(
     context_override: str | None = None,
     prior_analysis: dict | None = None,
     build_errors: str | None = None,
-) -> AnalysisResult:
+) -> AnalysisArtifact:
     """调用 LLM 进行算子语义分析。
 
     Args:
@@ -115,10 +109,10 @@ def analyze_with_llm(
     try:
         raw = chat_completion(cfg.llm, messages, max_tokens=1600, stage="analyze")
         data = json.loads(raw)
-        return AnalysisResult(analysis=data, raw_text=raw, llm_used=True)
+        return AnalysisArtifact(analysis_json=data, raw_text=raw, llm_used=True)
     except LlmError as e:
         fb = _fallback_analysis(discovery)
-        return AnalysisResult(analysis=fb, raw_text=str(e), llm_used=False, error=str(e))
+        return AnalysisArtifact(analysis_json=fb, raw_text=str(e), llm_used=False, error=str(e))
     except Exception as e:
         fb = _fallback_analysis(discovery)
-        return AnalysisResult(analysis=fb, raw_text=repr(e), llm_used=False, error=repr(e))
+        return AnalysisArtifact(analysis_json=fb, raw_text=repr(e), llm_used=False, error=repr(e))

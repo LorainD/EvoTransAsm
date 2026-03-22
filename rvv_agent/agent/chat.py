@@ -272,13 +272,13 @@ def handle_analyze(task: TaskContext) -> TaskContext:
 
     # Persist
     artifact = AnalysisArtifact(
-        analysis_json=analysis.analysis,
+        analysis_json=analysis.analysis_json,
         raw_text=analysis.raw_text,
         llm_used=analysis.llm_used,
     )
     aid = task.save_artifact("ANALYZE", artifact)
     task.artifacts.analysis_ids.append(aid)
-    write_json(task.run_dir / "analysis.json", analysis.analysis)
+    write_json(task.run_dir / "analysis.json", analysis.analysis_json)
 
     task.current_state = TaskState.PATCH
     return task

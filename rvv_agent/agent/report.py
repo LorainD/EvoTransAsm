@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING
 
 from ..core.util import CmdResult, ensure_dir, fmt_argv, write_json, write_text
 from ..tool.exec import ExecResult
-from .analyze import AnalysisResult
-from .plan import Plan
+# from .analyze import AnalysisResult
+# from .plan import Plan
+from ..core.task import AnalysisArtifact,PlanArtifact
 from .search import Discovery, group_files
 
 if TYPE_CHECKING:
@@ -35,9 +36,9 @@ def _cmd_section(title: str, res: CmdResult | None) -> str:
 def write_report(
     run_dir: Path,
     *,
-    plan: Plan,
+    plan: PlanArtifact,
     discovery: Discovery,
-    analysis: AnalysisResult,
+    analysis: AnalysisArtifact,
     generation_raw: str,
     materialized: list[Path],
     exec_result: ExecResult,
@@ -80,7 +81,7 @@ def write_report(
         md.append(f"- {m.file}:{m.line}: {m.text}")
 
     md.append("\n## Analysis JSON\n")
-    md.append("```json\n" + json.dumps(analysis.analysis, ensure_ascii=False, indent=2) + "\n```\n")
+    md.append("```json\n" + json.dumps(analysis.analysis_json, ensure_ascii=False, indent=2) + "\n```\n")
     md.append(f"- llm_used: {analysis.llm_used}\n")
     if analysis.error:
         md.append(f"- error: {analysis.error}\n")
@@ -101,7 +102,7 @@ def write_report(
         "symbol": discovery.symbol,
         "matches": [m.__dict__ for m in discovery.matches],
     })
-    write_json(run_dir / "analysis.json", analysis.analysis)
+    write_json(run_dir / "analysis.json", analysis.analysis_json)
 
     return report_path
 
