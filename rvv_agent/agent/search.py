@@ -350,9 +350,9 @@ def build_context_from_files(
 # ---------------------------------------------------------------------------
 # Retrieval result + LLM-assisted reference selection
 # ---------------------------------------------------------------------------
-from ..core.task import RetrievalArtifact
+from ..core.task import FileSearchArtifact
 
-from ..core.util import extract_json_from_llm
+from ..core.util import extract_json_from_llm, now_id
 
 # Alias for backward compat within this module
 _extract_retrieval_json = extract_json_from_llm
@@ -391,7 +391,7 @@ def select_references(
     cfg: AppConfig,
     ffmpeg_root: Path,
     intent_or_symbol: "Intent | str",
-) -> RetrievalArtifact:
+) -> FileSearchArtifact:
     """LLM 辅助筛选参考文件。"""
     if isinstance(intent_or_symbol, str):
         symbol = intent_or_symbol
@@ -409,10 +409,7 @@ def select_references(
         discovery = find_symbol(ffmpeg_root, symbol)
     grouped = group_files(discovery)
 
-    discovery_json = {
-        "symbol": discovery.symbol,
-        "matches": [m.__dict__ for m in discovery.matches[:200]],
-    }
+    file_search_id = now_id()
 
     messages = [
         LlmMessage(role="system", content=system_prompt()),
@@ -423,32 +420,41 @@ def select_references(
         data = _extract_retrieval_json(raw)
         if not isinstance(data, dict):
             raise ValueError("retrieval json is not dict")
-        return RetrievalArtifact(
-            discovery_json=discovery_json,
+        data["existing_rvv"] = existing_rvv
+        data["_discovery"] = {"symbol": discovery.symbol, "matches": [m.__dict__ for m in discovery.matches[:200]]}
+        return FileSearchArtifact(
+            file_search_id=file_search_id,
+            module=module,
+            symbol=symbol,
             selected_json=data,
             raw_text=raw,
             llm_used=True,
-            existing_rvv=existing_rvv,
         )
     except LlmError as e:
         fb = _fallback_selection(discovery)
-        return RetrievalArtifact(
-            discovery_json=discovery_json,
+        fb["existing_rvv"] = existing_rvv
+        fb["_discovery"] = {"symbol": discovery.symbol, "matches": [m.__dict__ for m in discovery.matches[:200]]}
+        return FileSearchArtifact(
+            file_search_id=file_search_id,
+            module=module,
+            symbol=symbol,
             selected_json=fb,
             raw_text=str(e),
             llm_used=False,
             error=str(e),
-            existing_rvv=existing_rvv,
         )
     except Exception as e:
         fb = _fallback_selection(discovery)
-        return RetrievalArtifact(
-            discovery_json=discovery_json,
+        fb["existing_rvv"] = existing_rvv
+        fb["_discovery"] = {"symbol": discovery.symbol, "matches": [m.__dict__ for m in discovery.matches[:200]]}
+        return FileSearchArtifact(
+            file_search_id=file_search_id,
+            module=module,
+            symbol=symbol,
             selected_json=fb,
             raw_text=repr(e),
             llm_used=False,
             error=repr(e),
-            existing_rvv=existing_rvv,
         )
 
 

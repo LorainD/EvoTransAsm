@@ -15,10 +15,11 @@ from .util import (
     run_cmd, run_cmd_stream, slug, write_json, write_text,
 )
 from .task import (
-    ArtifactIndex, TaskContext, TaskState, MigrationTarget,
-    RetrievalArtifact, AnalysisArtifact, PlanArtifact,
+    ArtifactIndex, TaskContext, TaskState, TaskStatus, MigrationTarget,
+    FunctionTask, MigrationTask,
+    FileSearchArtifact, ReferenceCodeArtifact, AnalysisArtifact, PlanArtifact,
     PatchPoint, PatchDesign, PatchArtifact,
-    BuildArtifact, DebugArtifact, KBUpdateArtifact,
+    BuildArtifact, DebugArtifact, KBUpdateArtifact, TaskUpdateArtifact,
 )
 from .statemachine import StateMachine
 
@@ -34,10 +35,11 @@ __all__ = [
     "print_llm_error", "print_red", "print_yellow",
     "run_cmd", "run_cmd_stream", "slug", "write_json", "write_text",
     # task (state machine)
-    "ArtifactIndex", "TaskContext", "TaskState", "MigrationTarget",
-    "RetrievalArtifact", "AnalysisArtifact", "PlanArtifact",
+    "ArtifactIndex", "TaskContext", "TaskState", "TaskStatus", "MigrationTarget",
+    "FunctionTask", "MigrationTask",
+    "FileSearchArtifact", "ReferenceCodeArtifact", "AnalysisArtifact", "PlanArtifact",
     "PatchPoint", "PatchDesign", "PatchArtifact",
-    "BuildArtifact", "DebugArtifact", "KBUpdateArtifact",
+    "BuildArtifact", "DebugArtifact", "KBUpdateArtifact", "TaskUpdateArtifact",
     # statemachine
     "StateMachine",
 ]

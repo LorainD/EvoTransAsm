@@ -136,8 +136,8 @@ def write_chat_report(task: "TaskContext") -> Path:
 
     # Reference files
     try:
-        retrieval = task.load_artifact("RETRIEVE")
-        files = retrieval.get("selected_files", [])
+        file_search = task.load_artifact("SEARCH_FILE")
+        files = file_search.get("selected_files", [])
         if files:
             md.append("## Reference Files\n\n" + "\n".join(f"- {f}" for f in files) + "\n")
     except Exception:

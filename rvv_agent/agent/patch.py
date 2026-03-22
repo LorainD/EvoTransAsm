@@ -203,7 +203,12 @@ def _locate_insertion_line_llm(cfg: AppConfig, target_path: str,
 
 def locate_patch_points(task: TaskContext) -> list[PatchPoint]:
     """LLM determines precise insertion anchors for the migration."""
-    retrieval = task.load_artifact("RETRIEVE")
+    file_search = task.load_artifact("SEARCH_FILE")
+    if task.artifacts.reference_code_ids:
+        sub = task.artifacts.reference_code_ids[-1].split("/", 1)[-1]
+        reference = task.load_artifact("BUILD_REFERENCE", sub_id=sub)
+    else:
+        reference = task.load_artifact("BUILD_REFERENCE")
     analysis = task.load_artifact("ANALYZE")
 
     messages = [
@@ -211,8 +216,8 @@ def locate_patch_points(task: TaskContext) -> list[PatchPoint]:
         LlmMessage(role="user", content=patch_locate_prompt(
             symbol=task.target.symbol,
             analysis_json=analysis.get("analysis_json", {}),
-            selected_files=retrieval.get("selected_files", []),
-            code_context=retrieval.get("code_context", ""),
+            selected_files=file_search.get("selected_files", []),
+            code_context=reference.get("code_context", ""),
         )),
     ]
     try:
@@ -291,12 +296,17 @@ def generate_code(task: TaskContext, design: PatchDesign,
     previous failing code in the prompt so the LLM can produce a targeted fix.
     """
     analysis = task.load_artifact("ANALYZE")
-    retrieval = task.load_artifact("RETRIEVE")
+    file_search = task.load_artifact("SEARCH_FILE")
+    if task.artifacts.reference_code_ids:
+        sub = task.artifacts.reference_code_ids[-1].split("/", 1)[-1]
+        reference = task.load_artifact("BUILD_REFERENCE", sub_id=sub)
+    else:
+        reference = task.load_artifact("BUILD_REFERENCE")
 
     # Build existing_files_map for incremental merge
     # Include .S files so LLM can see existing RVV implementations
     existing_map: dict[str, str] = {}
-    for rel in retrieval.get("selected_files", []):
+    for rel in file_search.get("selected_files", []):
         full = task.ffmpeg_root / rel
         if full.exists() and full.is_file():
             try:
@@ -309,7 +319,7 @@ def generate_code(task: TaskContext, design: PatchDesign,
                 pass
 
     # Also include existing RVV files from retrieval
-    for rel in retrieval.get("existing_rvv", []):
+    for rel in reference.get("existing_rvv", []):
         if rel not in existing_map:
             full = task.ffmpeg_root / rel
             if full.exists() and full.is_file():

@@ -4,8 +4,8 @@ All data types that flow through the state-machine pipeline are defined here.
 Each pipeline stage reads its inputs from previously-persisted artifacts and
 writes its outputs as a new artifact JSON under ``run_dir/state/``.
 
-TaskContext itself is a *thin manifest*: it stores only the task identity,
-current state, and an ArtifactIndex that points to the per-stage JSON files.
+TaskContext itself is a thin runtime manifest. Business lifecycle fields live in
+MigrationTask and are embedded as ``task``.
 """
 from __future__ import annotations
 
@@ -22,16 +22,25 @@ from typing import Any
 
 class TaskState(Enum):
     INTENT = "INTENT"
-    RETRIEVE = "RETRIEVE"
-    FUNC_DISCOVER = "FUNC_DISCOVER"
-    ANALYZE = "ANALYZE"
+    SEARCH_FILE = "SEARCH_FILE"          # SEARCH1
+    FUNC_DISCOVER = "FUNC_DISCOVER"      # SEARCH2
+    BUILD_REFERENCE = "BUILD_REFERENCE"  # SEARCH3
     PLAN = "PLAN"
+    ANALYZE = "ANALYZE"
     PATCH = "PATCH"
     BUILD = "BUILD"
+    DEBUG = "DEBUG"
     TEST = "TEST"
     KB_UPDATE = "KB_UPDATE"
+    TASK_UPDATE = "TASK_UPDATE"
     DONE = "DONE"
-    DEBUG = "DEBUG"
+
+
+class TaskStatus(Enum):
+    CREATED = "CREATED"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
 
 
 # ---------------------------------------------------------------------------
@@ -47,16 +56,54 @@ class MigrationTarget:
     current_function: str = ""                          # current function being migrated
 
 
+@dataclass
+class FunctionTask:
+    function_id: str = ""
+    function_name: str = ""
+    status: str = TaskStatus.CREATED.value
+    created_at: str = ""
+    finished_at: str = ""
+    summary: dict = field(default_factory=dict)
+
+
+@dataclass
+class MigrationTask:
+    task_id: str = ""
+    target: MigrationTarget = field(default_factory=lambda: MigrationTarget("", ""))
+    status: TaskStatus = TaskStatus.CREATED
+    created_at: str = ""
+    finished_at: str = ""
+    function_tasks: list[FunctionTask] = field(default_factory=list)
+    plan_id: str | None = None
+    summary: dict = field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # Stage artifacts — each persisted independently under state/<STAGE>.json
 # ---------------------------------------------------------------------------
 
 @dataclass
-class RetrievalArtifact:
-    """Output of RETRIEVE stage."""
-    discovery_json: dict = field(default_factory=dict)
+class FileSearchArtifact:
+    """Output of SEARCH_FILE stage."""
+    file_search_id: str = ""
+    module: str = ""
+    symbol: str = ""
     selected_files: list[str] = field(default_factory=list)
-    selected_json: dict = field(default_factory=dict)   # raw LLM selection result
+    selected_json: dict = field(default_factory=dict)
+    raw_text: str = ""
+    llm_used: bool = False
+    error: str | None = None
+
+
+@dataclass
+class ReferenceCodeArtifact:
+    """Output of BUILD_REFERENCE stage."""
+    reference_code_id: str = ""
+    file_search_id: str = ""
+    function_id: str = ""
+    function_name: str = ""
+    reference_files: list[str] = field(default_factory=list)
+    matched_symbols: list[str] = field(default_factory=list)
     code_context: str = ""
     existing_rvv: list[str] = field(default_factory=list)
     raw_text: str = ""
@@ -74,7 +121,7 @@ class FuncDiscoverArtifact:
 
 @dataclass
 class AnalysisArtifact:
-    """Output of ANALYZE stage — the 'migration contract'."""
+    """Output of ANALYZE stage — the migration contract."""
     analysis_json: dict = field(default_factory=dict)
     raw_text: str = ""
     llm_used: bool = False
@@ -124,21 +171,30 @@ class PatchArtifact:
 class BuildArtifact:
     """Output of BUILD stage (one per build run)."""
     run_id: str = ""
+    patch_id: str = ""
     cmd: str = ""
     stdout: str = ""
     stderr: str = ""
     exitcode: int = -1
     phase: str = ""          # "configure" | "make"
     artifact_path: str = ""  # e.g. path to checkasm binary
+    success: bool = False
+    error_type: str = ""
+    iteration_no: int = 0
 
 
 @dataclass
 class DebugArtifact:
     """Output of DEBUG stage."""
     run_id: str = ""
+    patch_id: str = ""
+    build_run_id: str = ""
+    test_id: str = ""
+    iteration_no: int = 0
     error_class: str = ""       # compile_error | link_error | runtime_error | test_mismatch
     error_text: str = ""
-    rollback_target: str = ""   # "locate" | "design" | "generate"
+    root_cause: str = ""
+    rollback_target: str = ""   # locate | design | generate
     fix_actions: list[str] = field(default_factory=list)
     llm_suggestion: str = ""
 
@@ -150,13 +206,25 @@ class KBUpdateArtifact:
     new_errors: list[dict] = field(default_factory=list)
 
 
+@dataclass
+class TaskUpdateArtifact:
+    """Output of TASK_UPDATE stage."""
+    task_id: str = ""
+    status: str = ""
+    finished_at: str = ""
+    summary: dict = field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # Artifact index — pointers into state/ directory
 # ---------------------------------------------------------------------------
 
 @dataclass
 class ArtifactIndex:
+    # Deprecated field kept for backward compatibility with historical task.json.
     retrieval_id: str | None = None
+    file_search_id: str | None = None
+    reference_code_ids: list[str] = field(default_factory=list)
     analysis_ids: list[str] = field(default_factory=list)
     plan_id: str | None = None
     patch_ids: list[str] = field(default_factory=list)
@@ -166,18 +234,15 @@ class ArtifactIndex:
 
 
 # ---------------------------------------------------------------------------
-# TaskContext — thin manifest
+# TaskContext — runtime manifest
 # ---------------------------------------------------------------------------
 
 @dataclass
 class TaskContext:
-    """Thin manifest threaded through the state machine.
-
-    Runtime-only fields (cfg, ffmpeg_root) are NOT serialised.
-    """
-    task_id: str = ""
-    target: MigrationTarget = field(default_factory=lambda: MigrationTarget("", ""))
+    """Runtime context threaded through the state machine."""
+    task: MigrationTask = field(default_factory=MigrationTask)
     current_state: TaskState = TaskState.INTENT
+    current_function_id: str = ""
     run_dir: Path = field(default_factory=lambda: Path("."))
     artifacts: ArtifactIndex = field(default_factory=ArtifactIndex)
 
@@ -195,6 +260,23 @@ class TaskContext:
     cfg: Any = field(default=None, repr=False)
     ffmpeg_root: Path = field(default_factory=lambda: Path("."))
 
+    # Backward-compatible convenience accessors
+    @property
+    def task_id(self) -> str:
+        return self.task.task_id
+
+    @task_id.setter
+    def task_id(self, value: str) -> None:
+        self.task.task_id = value
+
+    @property
+    def target(self) -> MigrationTarget:
+        return self.task.target
+
+    @target.setter
+    def target(self, value: MigrationTarget) -> None:
+        self.task.target = value
+
     # ── persistence ──────────────────────────────────────────────────────
 
     def _state_dir(self) -> Path:
@@ -205,30 +287,74 @@ class TaskContext:
     def save(self) -> None:
         """Persist task manifest to ``run_dir/state/task.json``."""
         data = {
-            "task_id": self.task_id,
-            "target": asdict(self.target),
+            "task": {
+                **asdict(self.task),
+                "status": self.task.status.value if isinstance(self.task.status, TaskStatus) else str(self.task.status),
+            },
             "current_state": self.current_state.value,
+            "current_function_id": self.current_function_id,
             "run_dir": str(self.run_dir),
             "artifacts": asdict(self.artifacts),
             "all_build_errors": self.all_build_errors,
             "rollback_hint": self.rollback_hint,
             "jobs": self.jobs,
+            # Legacy fields for compatibility with older tools
+            "task_id": self.task.task_id,
+            "target": asdict(self.task.target),
         }
         p = self._state_dir() / "task.json"
         p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     @classmethod
     def load(cls, run_dir: Path, cfg: Any = None) -> "TaskContext":
-        """Restore from ``run_dir/state/task.json``."""
+        """Restore from ``run_dir/state/task.json``.
+
+        Supports both new schema and legacy schema used before MigrationTask split.
+        """
         p = run_dir / "state" / "task.json"
         data = json.loads(p.read_text(encoding="utf-8"))
-        target = MigrationTarget(**data["target"])
+
+        if "task" in data:
+            task_data = data["task"]
+            target = MigrationTarget(**task_data.get("target", {}))
+            function_tasks = [FunctionTask(**ft) for ft in task_data.get("function_tasks", [])]
+            status_raw = task_data.get("status", TaskStatus.CREATED.value)
+            try:
+                status = TaskStatus(status_raw)
+            except Exception:
+                status = TaskStatus.CREATED
+            mtask = MigrationTask(
+                task_id=task_data.get("task_id", data.get("task_id", "")),
+                target=target,
+                status=status,
+                created_at=task_data.get("created_at", ""),
+                finished_at=task_data.get("finished_at", ""),
+                function_tasks=function_tasks,
+                plan_id=task_data.get("plan_id"),
+                summary=task_data.get("summary", {}),
+            )
+        else:
+            # Legacy schema fallback
+            target = MigrationTarget(**data.get("target", {}))
+            mtask = MigrationTask(
+                task_id=data.get("task_id", ""),
+                target=target,
+                status=TaskStatus.RUNNING,
+            )
+
         artifacts = ArtifactIndex(**data.get("artifacts", {}))
+
+        state_raw = data.get("current_state", TaskState.INTENT.value)
+        if state_raw == "RETRIEVE":
+            # Legacy state alias
+            state_raw = TaskState.SEARCH_FILE.value
+        current_state = TaskState(state_raw)
+
         return cls(
-            task_id=data["task_id"],
-            target=target,
-            current_state=TaskState(data["current_state"]),
-            run_dir=Path(data["run_dir"]),
+            task=mtask,
+            current_state=current_state,
+            current_function_id=data.get("current_function_id", ""),
+            run_dir=Path(data.get("run_dir", str(run_dir))),
             artifacts=artifacts,
             all_build_errors=data.get("all_build_errors", []),
             rollback_hint=data.get("rollback_hint", ""),

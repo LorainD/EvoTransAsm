@@ -5,7 +5,7 @@ architecture.  Each migration stage is an independent handler function.
 Normal chat (non-migrate) still uses a simple multi-turn conversation loop.
 
 State machine flow:
-  INTENT → RETRIEVE → FUNC_DISCOVER → PLAN → ANALYZE → PATCH → BUILD → (TEST) → (KB_UPDATE) → DONE
+  INTENT → SEARCH_FILE → FUNC_DISCOVER → BUILD_REFERENCE → PLAN → ANALYZE → PATCH → BUILD → (TEST) → (KB_UPDATE) → DONE
   BUILD failure → DEBUG → PATCH (retry)
 """
 from __future__ import annotations
@@ -14,6 +14,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from ..core.config import AppConfig
@@ -36,10 +37,14 @@ from ..core.task import (
     BuildArtifact,
     KBUpdateArtifact,
     MigrationTarget,
+    MigrationTask,
     PlanArtifact,
-    RetrievalArtifact,
+    FileSearchArtifact,
+    ReferenceCodeArtifact,
     TaskContext,
     TaskState,
+    TaskStatus,
+    TaskUpdateArtifact,
 )
 from ..core.util import (
     ensure_dir,
@@ -111,36 +116,33 @@ def handle_intent(task: TaskContext) -> TaskContext:
         "functions": task.target.functions,
     })
     record_trajectory_action("intent", f"Target confirmed: {task.target.symbol}")
-    task.current_state = TaskState.RETRIEVE
+    task.current_state = TaskState.SEARCH_FILE
     return task
 
 
 def handle_retrieve(task: TaskContext) -> TaskContext:
-    """RETRIEVE handler: search symbol + select reference files + user refinement."""
-    from .search import build_context_from_files, select_references
-    from .intent import Intent
+    """SEARCH_FILE handler: search symbol + select reference files + user refinement."""
+    from .search import select_references
 
     ffmpeg_root = task.ffmpeg_root
     symbol = task.target.symbol
     module = task.target.module
 
     # 分层检索：先用 module 再用 symbol，合并去重
-    retrieval = select_references(task.cfg, ffmpeg_root, symbol)
+    file_search = select_references(task.cfg, ffmpeg_root, symbol)
     if module and module != symbol:
-        retrieval_mod = select_references(task.cfg, ffmpeg_root, module)
-        # Merge module-level results into symbol-level
+        file_search_mod = select_references(task.cfg, ffmpeg_root, module)
         for k in ("c", "x86", "arm", "riscv", "headers", "makefiles", "checkasm"):
-            sym_list = retrieval.selected_json.get(k, [])
-            mod_list = retrieval_mod.selected_json.get(k, [])
+            sym_list = file_search.selected_json.get(k, [])
+            mod_list = file_search_mod.selected_json.get(k, [])
             merged = list(dict.fromkeys(sym_list + mod_list))
-            retrieval.selected_json[k] = merged
-        # Merge existing RVV
-        for r in retrieval_mod.existing_rvv:
-            if r not in retrieval.existing_rvv:
-                retrieval.existing_rvv.append(r)
+            file_search.selected_json[k] = merged
+        mod_existing = file_search_mod.selected_json.get("existing_rvv", [])
+        sym_existing = file_search.selected_json.get("existing_rvv", [])
+        file_search.selected_json["existing_rvv"] = list(dict.fromkeys(sym_existing + mod_existing))
 
-    write_text(task.run_dir / "retrieval_raw.txt", retrieval.raw_text + "\n")
-    selected = retrieval.selected_json
+    write_text(task.run_dir / "retrieval_raw.txt", file_search.raw_text + "\n")
+    selected = file_search.selected_json
 
     def _list(key: str) -> list[str]:
         v = selected.get(key, [])
@@ -151,17 +153,16 @@ def handle_retrieve(task: TaskContext) -> TaskContext:
         selected_files.extend(_list(k))
     selected_files = list(dict.fromkeys(selected_files))
 
-    # Merge existing RVV files
-    for r in retrieval.existing_rvv:
+    existing_rvv = _list("existing_rvv")
+    for r in existing_rvv:
         if r not in selected_files:
             selected_files.append(r)
 
     print("\n检索/选择出的参考文件：")
     for p in selected_files:
-        tag = "[existing-rvv] " if p in retrieval.existing_rvv else ""
+        tag = "[existing-rvv] " if p in existing_rvv else ""
         print(f"  {tag}{p}")
 
-    # User refinement
     if not prompt_yes_no("\n确认进入分析/生成阶段？", default=True):
         selected_files = _refine_files(task.cfg, symbol, selected_files)
         if not selected_files:
@@ -176,17 +177,9 @@ def handle_retrieve(task: TaskContext) -> TaskContext:
         event_type="human_output",
     )
 
-    # Build code context from selected files
-    ctx_text = build_context_from_files(
-        ffmpeg_root, symbol=symbol, files=selected_files,
-    )
-    write_text(task.run_dir / "context.txt", ctx_text)
-
-    # Persist artifact — reuse the retrieval object, fill in remaining fields
-    retrieval.selected_files = selected_files
-    retrieval.code_context = ctx_text
-    aid = task.save_artifact("RETRIEVE", retrieval)
-    task.artifacts.retrieval_id = aid
+    file_search.selected_files = selected_files
+    aid = task.save_artifact("SEARCH_FILE", file_search)
+    task.artifacts.file_search_id = aid
 
     task.current_state = TaskState.FUNC_DISCOVER
     return task
@@ -195,14 +188,15 @@ def handle_retrieve(task: TaskContext) -> TaskContext:
 def handle_func_discover(task: TaskContext) -> TaskContext:
     """FUNC_DISCOVER handler: identify all migratable functions in the module."""
     from .analyze import discover_functions
+    from .search import build_context_from_files
 
-    retrieval = task.load_artifact("RETRIEVE")
-    code_context = retrieval.get("code_context", "")
+    file_search = task.load_artifact("SEARCH_FILE")
+    selected_files = file_search.get("selected_files", [])
+    code_context = build_context_from_files(task.ffmpeg_root, symbol=task.target.symbol, files=selected_files)
 
     print("\n正在识别可迁移的函数…")
     artifact = discover_functions(task.cfg, code_context, task.target)
 
-    # Display discovered functions
     for f in artifact.functions:
         name = f.get("name", "?")
         reason = f.get("reason", "")
@@ -215,6 +209,45 @@ def handle_func_discover(task: TaskContext) -> TaskContext:
     )
 
     task.save_artifact("FUNC_DISCOVER", artifact)
+    task.current_state = TaskState.BUILD_REFERENCE
+    return task
+
+
+def handle_build_reference(task: TaskContext) -> TaskContext:
+    """BUILD_REFERENCE handler: materialize function-scoped reference code context."""
+    from .search import build_context_from_files
+
+    file_search = task.load_artifact("SEARCH_FILE")
+    selected_files = file_search.get("selected_files", [])
+
+    try:
+        func_discover = task.load_artifact("FUNC_DISCOVER")
+        discovered = [str(f.get("name", "")).strip() for f in func_discover.get("functions", []) if f.get("name")]
+    except Exception:
+        discovered = []
+
+    function_name = task.target.current_function or (discovered[0] if discovered else task.target.symbol)
+    function_id = f"{task.task_id}:{function_name}"
+    code_context = build_context_from_files(task.ffmpeg_root, symbol=function_name, files=selected_files)
+    write_text(task.run_dir / "context.txt", code_context)
+
+    ref_id = now_id()
+    artifact = ReferenceCodeArtifact(
+        reference_code_id=ref_id,
+        file_search_id=str(task.artifacts.file_search_id or file_search.get("file_search_id", "")),
+        function_id=function_id,
+        function_name=function_name,
+        reference_files=selected_files,
+        matched_symbols=[task.target.symbol, function_name],
+        code_context=code_context,
+        existing_rvv=[str(x) for x in file_search.get("selected_json", {}).get("existing_rvv", [])],
+        raw_text="",
+        llm_used=False,
+    )
+
+    sub_id = slug(function_id)
+    aid = task.save_artifact("BUILD_REFERENCE", artifact, sub_id=sub_id)
+    task.artifacts.reference_code_ids.append(aid)
     task.current_state = TaskState.PLAN
     return task
 
@@ -227,10 +260,14 @@ def handle_analyze(task: TaskContext) -> TaskContext:
     current_function is already advanced by handle_kb_update.
     """
     from .analyze import analyze_with_llm
-    from .search import Discovery, Match
+    from .search import Discovery
 
-    retrieval = task.load_artifact("RETRIEVE")
-    code_context = retrieval.get("code_context", "")
+    if task.artifacts.reference_code_ids:
+        sub = task.artifacts.reference_code_ids[-1].split("/", 1)[-1]
+        reference = task.load_artifact("BUILD_REFERENCE", sub_id=sub)
+    else:
+        reference = task.load_artifact("BUILD_REFERENCE")
+    code_context = reference.get("code_context", "")
 
     # Determine function_order from plan
     try:
@@ -252,9 +289,8 @@ def handle_analyze(task: TaskContext) -> TaskContext:
     # Pass accumulated build errors if any (from DEBUG cycles)
     build_errors_text = "\n---\n".join(task.all_build_errors) if task.all_build_errors else None
 
-    # Build a Discovery object for analyze_with_llm
-    matches = [Match(**m) for m in retrieval.get("discovery_json", {}).get("matches", [])]
-    discovery = Discovery(symbol=task.target.symbol, matches=matches)
+    # build_llm_context is provided by BUILD_REFERENCE artifact, matches are optional here
+    discovery = Discovery(symbol=task.target.symbol, matches=[])
 
     analysis = analyze_with_llm(
         task.cfg,
@@ -410,6 +446,7 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
     )
     aid = task.save_artifact("PLAN", artifact)
     task.artifacts.plan_id = aid
+    task.task.plan_id = aid
 
     task.current_state = TaskState.ANALYZE
     return task
@@ -464,6 +501,8 @@ def handle_build(task: TaskContext) -> TaskContext:
     ffmpeg_root = task.ffmpeg_root
     build_dir = ffmpeg_root / task.cfg.ffmpeg.build_dir
     jobs = max(1, os.cpu_count() or 1)
+    patch_id = task.artifacts.patch_ids[-1] if task.artifacts.patch_ids else ""
+    iteration_no = len(task.artifacts.build_run_ids) + 1
 
     # Check human policy
     exec_ok = task.cfg.human.exec_ok
@@ -477,7 +516,7 @@ def handle_build(task: TaskContext) -> TaskContext:
 
     if not exec_ok:
         print("跳过构建阶段。")
-        task.current_state = TaskState.DONE
+        task.current_state = TaskState.TASK_UPDATE
         return task
 
     ensure_dir(build_dir)
@@ -488,11 +527,15 @@ def handle_build(task: TaskContext) -> TaskContext:
 
     build_artifact = BuildArtifact(
         run_id=now_id(),
+        patch_id=patch_id,
         cmd=fmt_argv(configure_argv(task.cfg, ffmpeg_root)),
         stdout=cfg_result.stdout,
         stderr=cfg_result.stderr,
         exitcode=cfg_result.returncode,
         phase="configure",
+        success=cfg_result.returncode == 0,
+        error_type="configure_error" if cfg_result.returncode != 0 else "",
+        iteration_no=iteration_no,
     )
 
     if cfg_result.returncode != 0:
@@ -512,12 +555,16 @@ def handle_build(task: TaskContext) -> TaskContext:
 
     build_artifact = BuildArtifact(
         run_id=now_id(),
+        patch_id=patch_id,
         cmd=fmt_argv(make_checkasm_argv(jobs=jobs)),
         stdout=make_result.stdout,
         stderr=make_result.stderr,
         exitcode=make_result.returncode,
         phase="make",
         artifact_path=str(build_dir / "tests" / "checkasm" / "checkasm"),
+        success=make_result.returncode == 0,
+        error_type="build_error" if make_result.returncode != 0 else "",
+        iteration_no=iteration_no,
     )
     aid = task.save_artifact("BUILD", build_artifact, sub_id=build_artifact.run_id)
     task.artifacts.build_run_ids.append(build_artifact.run_id)
@@ -536,6 +583,8 @@ def handle_build(task: TaskContext) -> TaskContext:
         if not has_rvv:
             print("\n[WARN] 构建通过但未检测到有效 RVV 指令，可能是空壳实现")
             record_trajectory_action("build_warn", "Build passed but no real RVV instructions detected")
+            build_artifact.error_type = "rvv_missing"
+            task.save_artifact("BUILD", build_artifact, sub_id=build_artifact.run_id)
             task.current_state = TaskState.DEBUG
         else:
             print(f"\n构建成功 ✓")
@@ -618,21 +667,21 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
     """KB_UPDATE handler: extract patterns from successful migration."""
     if kb is None:
         task.save_artifact("KB_UPDATE", KBUpdateArtifact())
-        task.current_state = TaskState.DONE
+        task.current_state = TaskState.TASK_UPDATE
         return task
 
-    # Load analysis and retrieval for richer extraction
+    # Load analysis and file-search for richer extraction
     try:
         analysis = task.load_artifact("ANALYZE")
     except Exception:
         analysis = {}
     try:
-        retrieval = task.load_artifact("RETRIEVE")
+        file_search = task.load_artifact("SEARCH_FILE")
     except Exception:
-        retrieval = {}
+        file_search = {}
 
     analysis_json = analysis.get("analysis_json", {})
-    selected_files = retrieval.get("selected_files", [])
+    selected_files = file_search.get("selected_files", [])
     symbol = task.target.symbol
 
     # Build architecture field from file presence
@@ -727,9 +776,40 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
             task.target.current_function = next_func
             # Clear build errors for the new function cycle
             task.all_build_errors.clear()
-            task.current_state = TaskState.ANALYZE
+            task.current_state = TaskState.BUILD_REFERENCE
             return task
 
+    task.current_state = TaskState.TASK_UPDATE
+    return task
+
+
+def handle_task_update(task: TaskContext) -> TaskContext:
+    """TASK_UPDATE handler: finalize task lifecycle and persist summary."""
+    if task.artifacts.build_run_ids:
+        try:
+            last = task.load_artifact("BUILD", sub_id=task.artifacts.build_run_ids[-1])
+            build_ok = last.get("exitcode", -1) == 0
+        except Exception:
+            build_ok = False
+    else:
+        build_ok = False
+
+    now_ts = datetime.now().isoformat(timespec="seconds")
+    task.task.finished_at = now_ts
+    task.task.status = TaskStatus.SUCCEEDED if build_ok else TaskStatus.FAILED
+    task.task.summary = {
+        "build_success": build_ok,
+        "debug_cycles": len(task.artifacts.debug_run_ids),
+        "patch_count": len(task.artifacts.patch_ids),
+    }
+
+    artifact = TaskUpdateArtifact(
+        task_id=task.task_id,
+        status=task.task.status.value,
+        finished_at=task.task.finished_at,
+        summary=task.task.summary,
+    )
+    task.save_artifact("TASK_UPDATE", artifact)
     task.current_state = TaskState.DONE
     return task
 
@@ -806,8 +886,12 @@ def run_chat(cfg: AppConfig) -> int:
         ensure_dir(run_dir)
 
         task = TaskContext(
-            task_id=task_id,
-            target=target,
+            task=MigrationTask(
+                task_id=task_id,
+                target=target,
+                status=TaskStatus.RUNNING,
+                created_at=datetime.now().isoformat(timespec="seconds"),
+            ),
             current_state=TaskState.INTENT,
             run_dir=run_dir,
             cfg=cfg,
@@ -819,11 +903,12 @@ def run_chat(cfg: AppConfig) -> int:
         reset_trajectory()
 
         # Register state handlers
-        # Flow: INTENT → RETRIEVE → FUNC_DISCOVER → PLAN → ANALYZE → PATCH → BUILD → ...
+        # Flow: INTENT → SEARCH_FILE → FUNC_DISCOVER → BUILD_REFERENCE → PLAN → ANALYZE → PATCH → BUILD → ...
         handlers = {
             TaskState.INTENT: handle_intent,
-            TaskState.RETRIEVE: handle_retrieve,
+            TaskState.SEARCH_FILE: handle_retrieve,
             TaskState.FUNC_DISCOVER: handle_func_discover,
+            TaskState.BUILD_REFERENCE: handle_build_reference,
             TaskState.PLAN: lambda t: handle_plan(t, kb),
             TaskState.ANALYZE: handle_analyze,
             TaskState.PATCH: lambda t: handle_patch(t, kb),
@@ -831,6 +916,7 @@ def run_chat(cfg: AppConfig) -> int:
             TaskState.DEBUG: lambda t: handle_debug(t, kb),
             TaskState.TEST: handle_test,
             TaskState.KB_UPDATE: lambda t: handle_kb_update(t, kb),
+            TaskState.TASK_UPDATE: handle_task_update,
         }
 
         # Run state machine

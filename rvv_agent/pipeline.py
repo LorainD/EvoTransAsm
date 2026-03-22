@@ -2,7 +2,7 @@
 
 Rewritten to share the same StateMachine infrastructure as chat mode.
 Four handlers are reused from chat.py (ANALYZE, PATCH, DEBUG, KB_UPDATE);
-four are pipeline-specific non-interactive variants (INTENT, RETRIEVE, PLAN, BUILD).
+four are pipeline-specific non-interactive variants (INTENT, SEARCH_FILE, PLAN, BUILD).
 """
 from __future__ import annotations
 
@@ -10,19 +10,29 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from .agent.chat import handle_analyze, handle_debug, handle_kb_update, handle_patch
+from .agent.chat import (
+    handle_analyze,
+    handle_build_reference,
+    handle_debug,
+    handle_func_discover,
+    handle_kb_update,
+    handle_patch,
+    handle_task_update,
+)
 from .agent.plan import fixed_plan
 from .agent.report import write_chat_report
-from .agent.search import build_context_from_files, select_references
+from .agent.search import select_references
 from .core.llm import get_trajectory_dict, record_trajectory_action, reset_trajectory
 from .core.statemachine import StateMachine
 from .core.task import (
     BuildArtifact,
     MigrationTarget,
+    MigrationTask,
     PlanArtifact,
-    RetrievalArtifact,
+    FileSearchArtifact,
     TaskContext,
     TaskState,
+    TaskStatus,
 )
 from .core.util import (
     ensure_dir,
@@ -61,18 +71,18 @@ def _handle_intent_pipeline(task: TaskContext) -> TaskContext:
         "functions": task.target.functions,
     })
     record_trajectory_action("intent", f"Target confirmed: {symbol}")
-    task.current_state = TaskState.RETRIEVE
+    task.current_state = TaskState.SEARCH_FILE
     return task
 
 
 def _handle_retrieve_pipeline(task: TaskContext) -> TaskContext:
-    """RETRIEVE: search + select references, no user interaction."""
+    """SEARCH_FILE: search + select references, no user interaction."""
     ffmpeg_root = task.ffmpeg_root
     symbol = task.target.symbol
 
-    retrieval = select_references(task.cfg, ffmpeg_root, symbol)
-    write_text(task.run_dir / "retrieval_raw.txt", retrieval.raw_text + "\n")
-    selected = retrieval.selected
+    file_search = select_references(task.cfg, ffmpeg_root, symbol)
+    write_text(task.run_dir / "retrieval_raw.txt", file_search.raw_text + "\n")
+    selected = file_search.selected_json
 
     def _list(key: str) -> list[str]:
         v = selected.get(key, [])
@@ -83,7 +93,7 @@ def _handle_retrieve_pipeline(task: TaskContext) -> TaskContext:
         selected_files.extend(_list(k))
     selected_files = list(dict.fromkeys(selected_files))
 
-    for r in retrieval.existing_rvv:
+    for r in _list("existing_rvv"):
         if r not in selected_files:
             selected_files.append(r)
 
@@ -95,22 +105,10 @@ def _handle_retrieve_pipeline(task: TaskContext) -> TaskContext:
         event_type="human_output",
     )
 
-    ctx_text = build_context_from_files(
-        ffmpeg_root, symbol=symbol, files=selected_files,
-    )
-    write_text(task.run_dir / "context.txt", ctx_text)
-
-    artifact = RetrievalArtifact(
-        discovery_json={
-            "symbol": retrieval.discovery.symbol,
-            "matches": [m.__dict__ for m in retrieval.discovery.matches[:200]],
-        },
-        selected_files=selected_files,
-        code_context=ctx_text,
-    )
-    aid = task.save_artifact("RETRIEVE", artifact)
-    task.artifacts.retrieval_id = aid
-    task.current_state = TaskState.ANALYZE
+    file_search.selected_files = selected_files
+    aid = task.save_artifact("SEARCH_FILE", file_search)
+    task.artifacts.file_search_id = aid
+    task.current_state = TaskState.FUNC_DISCOVER
     return task
 
 
@@ -126,6 +124,7 @@ def _handle_plan_pipeline(task: TaskContext) -> TaskContext:
     artifact.acceptance_criteria = {"build_ok": True}
     aid = task.save_artifact("PLAN", artifact)
     task.artifacts.plan_id = aid
+    task.task.plan_id = aid
     record_trajectory_action("plan", f"Fixed plan for {symbol}")
     task.current_state = TaskState.PATCH
     return task
@@ -141,6 +140,8 @@ def _handle_build_pipeline(task: TaskContext) -> TaskContext:
     ffmpeg_root = task.ffmpeg_root
     build_dir = ffmpeg_root / task.cfg.ffmpeg.build_dir
     jobs = task.jobs if task.jobs > 0 else max(1, os.cpu_count() or 1)
+    patch_id = task.artifacts.patch_ids[-1] if task.artifacts.patch_ids else ""
+    iteration_no = len(task.artifacts.build_run_ids) + 1
     ensure_dir(build_dir)
 
     # --- configure ---
@@ -149,11 +150,15 @@ def _handle_build_pipeline(task: TaskContext) -> TaskContext:
 
     build_artifact = BuildArtifact(
         run_id=now_id(),
+        patch_id=patch_id,
         cmd=fmt_argv(configure_argv(task.cfg, ffmpeg_root)),
         stdout=cfg_result.stdout,
         stderr=cfg_result.stderr,
         exitcode=cfg_result.returncode,
         phase="configure",
+        success=cfg_result.returncode == 0,
+        error_type="configure_error" if cfg_result.returncode != 0 else "",
+        iteration_no=iteration_no,
     )
 
     if cfg_result.returncode != 0:
@@ -172,12 +177,16 @@ def _handle_build_pipeline(task: TaskContext) -> TaskContext:
 
     build_artifact = BuildArtifact(
         run_id=now_id(),
+        patch_id=patch_id,
         cmd=fmt_argv(make_checkasm_argv(jobs=jobs)),
         stdout=make_result.stdout,
         stderr=make_result.stderr,
         exitcode=make_result.returncode,
         phase="make",
         artifact_path=str(build_dir / "tests" / "checkasm" / "checkasm"),
+        success=make_result.returncode == 0,
+        error_type="build_error" if make_result.returncode != 0 else "",
+        iteration_no=iteration_no,
     )
     task.save_artifact("BUILD", build_artifact, sub_id=build_artifact.run_id)
     task.artifacts.build_run_ids.append(build_artifact.run_id)
@@ -262,8 +271,11 @@ def run_migrate(
     ensure_dir(run_dir)
 
     task = TaskContext(
-        task_id=task_id,
-        target=target,
+        task=MigrationTask(
+            task_id=task_id,
+            target=target,
+            status=TaskStatus.RUNNING,
+        ),
         current_state=TaskState.INTENT,
         run_dir=run_dir,
         cfg=cfg,
@@ -280,14 +292,17 @@ def run_migrate(
 
     # 6. Register handlers
     handlers = {
-        TaskState.INTENT:    _handle_intent_pipeline,
-        TaskState.RETRIEVE:  _handle_retrieve_pipeline,
-        TaskState.ANALYZE:   handle_analyze,
+        TaskState.INTENT:          _handle_intent_pipeline,
+        TaskState.SEARCH_FILE:     _handle_retrieve_pipeline,
+        TaskState.FUNC_DISCOVER:   handle_func_discover,
+        TaskState.BUILD_REFERENCE: handle_build_reference,
+        TaskState.ANALYZE:         handle_analyze,
         TaskState.PLAN:      _handle_plan_pipeline,
         TaskState.PATCH:     lambda t: handle_patch(t, kb),
         TaskState.BUILD:     _handle_build_pipeline,
         TaskState.DEBUG:     lambda t: handle_debug(t, kb),
         TaskState.KB_UPDATE: lambda t: handle_kb_update(t, kb),
+        TaskState.TASK_UPDATE: handle_task_update,
     }
 
     # 7. Run state machine

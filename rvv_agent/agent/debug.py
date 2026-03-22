@@ -91,8 +91,16 @@ def determine_rollback(
 # LLM-assisted debug (optional enhancement)
 # ---------------------------------------------------------------------------
 
-def _llm_classify(cfg: AppConfig, error_text: str,
-                  current_patch: dict | None = None) -> DebugArtifact | None:
+def _llm_classify(
+    cfg: AppConfig,
+    error_text: str,
+    current_patch: dict | None = None,
+    *,
+    patch_id: str = "",
+    build_run_id: str = "",
+    iteration_no: int = 0,
+    root_cause: str = "",
+) -> DebugArtifact | None:
     """Call LLM for structured error diagnosis. Returns None on failure."""
     messages = [
         LlmMessage(role="system", content=system_prompt()),
@@ -108,8 +116,13 @@ def _llm_classify(cfg: AppConfig, error_text: str,
         data = json.loads(raw[s:e + 1])
         return DebugArtifact(
             run_id=now_id(),
+            patch_id=patch_id,
+            build_run_id=build_run_id,
+            test_id="",
+            iteration_no=iteration_no,
             error_class=str(data.get("error_class", "compile_error")),
             error_text=error_text[:4000],
+            root_cause=str(data.get("root_cause", root_cause)),
             rollback_target=str(data.get("rollback_target", "generate")),
             fix_actions=[str(a) for a in data.get("fix_actions", [])],
             llm_suggestion=str(data.get("suggestion", "")),
@@ -143,6 +156,10 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
         return task
 
     latest_build = task.load_artifact("BUILD", sub_id=build_ids[-1])
+    build_run_id = build_ids[-1]
+    patch_id = str(latest_build.get("patch_id", ""))
+    iteration_no = int(latest_build.get("iteration_no", len(build_ids)))
+    root_cause = str(latest_build.get("error_type", "") or "build_failure")
     error_text = extract_build_errors(
         latest_build.get("stdout", "") + latest_build.get("stderr", "")
     )
@@ -182,13 +199,26 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
         if latest_patch_id and "/" in latest_patch_id:
             latest_patch_id = latest_patch_id.split("/", 1)[1]
         current_patch = task.load_artifact("PATCH", sub_id=latest_patch_id) if latest_patch_id else None
-        artifact = _llm_classify(task.cfg, error_text, current_patch)
+        artifact = _llm_classify(
+            task.cfg,
+            error_text,
+            current_patch,
+            patch_id=patch_id,
+            build_run_id=build_run_id,
+            iteration_no=iteration_no,
+            root_cause=root_cause,
+        )
 
     if artifact is None:
         artifact = DebugArtifact(
             run_id=now_id(),
+            patch_id=patch_id,
+            build_run_id=build_run_id,
+            test_id="",
+            iteration_no=iteration_no,
             error_class=error_class.value,
             error_text=error_text[:4000],
+            root_cause=root_cause,
             rollback_target=rollback.value,
             fix_actions=kb_hints,
             llm_suggestion="",
@@ -196,6 +226,16 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
     elif kb_hints:
         # Prepend KB hints to LLM-generated fix_actions
         artifact.fix_actions = kb_hints + artifact.fix_actions
+
+    # Fill required linkage fields if LLM output omitted them
+    if not artifact.patch_id:
+        artifact.patch_id = patch_id
+    if not artifact.build_run_id:
+        artifact.build_run_id = build_run_id
+    if artifact.iteration_no <= 0:
+        artifact.iteration_no = iteration_no
+    if not artifact.root_cause:
+        artifact.root_cause = root_cause
 
     # Print suggestions
     if artifact.fix_actions:

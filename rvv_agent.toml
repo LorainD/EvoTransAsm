@@ -23,7 +23,8 @@ cpu = "rv64gcv"
 extra_cflags = "-march=rv64gcv -mabi=lp64d -O3"
 extra_ldflags = "-static"
 # Prepend this directory to PATH so the RISC-V cross-compiler is found in subprocesses.
-extra_path = "/home/yuhe/project/local/riscv/bin"
+#extra_path = "/home/yuhe/project/local/riscv/bin"
+extra_path = "/data/workspace/yuhe/local/crossrvv/riscv-rvv-linux/bin"
 
 [ffmpeg]
 root = "workplace/FFmpeg"
