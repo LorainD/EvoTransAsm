@@ -113,20 +113,34 @@ def _handle_retrieve_pipeline(task: TaskContext) -> TaskContext:
 
 
 def _handle_plan_pipeline(task: TaskContext) -> TaskContext:
-    """PLAN: use fixed_plan (no LLM, no user refinement)."""
+    """PLAN: use fixed_plan and synchronize function_order from FUNC_DISCOVER."""
     symbol = task.target.symbol
+
+    discovered_functions: list[str] = []
+    try:
+        func_discover = task.load_artifact("FUNC_DISCOVER")
+        discovered_functions = [
+            str(f.get("name", "")).strip()
+            for f in func_discover.get("functions", [])
+            if f.get("name")
+        ]
+    except Exception:
+        discovered_functions = []
+
+    if not discovered_functions:
+        discovered_functions = task.target.functions or [symbol]
+
     plan = fixed_plan(symbol)
     print(f"[pipeline] Plan: {len(plan.steps)} steps")
 
     artifact = plan
-    if not artifact.function_order:
-        artifact.function_order = [symbol]
+    artifact.function_order = discovered_functions
     artifact.acceptance_criteria = {"build_ok": True}
     aid = task.save_artifact("PLAN", artifact)
     task.artifacts.plan_id = aid
     task.task.plan_id = aid
-    record_trajectory_action("plan", f"Fixed plan for {symbol}")
-    task.current_state = TaskState.PATCH
+    record_trajectory_action("plan", f"Fixed plan for {symbol} ({len(discovered_functions)} funcs)")
+    task.current_state = TaskState.ANALYZE
     return task
 
 
@@ -134,7 +148,7 @@ def _handle_build_pipeline(task: TaskContext) -> TaskContext:
     """BUILD: configure + make checkasm, no user prompts."""
     if not task.cfg.human.exec_ok:
         print("[pipeline] 跳过构建（--exec 未指定）")
-        task.current_state = TaskState.DONE
+        task.current_state = TaskState.TASK_UPDATE
         return task
 
     ffmpeg_root = task.ffmpeg_root

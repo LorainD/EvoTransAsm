@@ -409,7 +409,21 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
     from .plan import llm_plan
 
     symbol = task.target.symbol
-    functions = task.target.functions or [symbol]
+
+    # functions should come from FUNC_DISCOVER stage first
+    functions: list[str] = []
+    try:
+        func_discover = task.load_artifact("FUNC_DISCOVER")
+        functions = [
+            str(f.get("name", "")).strip()
+            for f in func_discover.get("functions", [])
+            if f.get("name")
+        ]
+    except Exception:
+        functions = []
+
+    if not functions:
+        functions = task.target.functions or [symbol]
 
     print("\n正在生成迁移计划…")
     plan = llm_plan(task.cfg, symbol, functions=functions)
