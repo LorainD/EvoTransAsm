@@ -11,7 +11,7 @@ import json
 from ..core.config import AppConfig
 from ..core.llm import LlmError, LlmMessage, chat_completion
 from ..core.prompts import analysis_prompt, function_discovery_prompt, system_prompt
-from ..core.task import AnalysisArtifact, FuncDiscoverArtifact, MigrationTarget
+from ..core.task import AnalysisArtifact, FuncDiscoverArtifact, MigrationTarget, DiscoveredFunction, load_func_discover_artifact
 from ..core.util import extract_json_from_llm
 from .search import Discovery, build_llm_context, group_files
 
@@ -37,21 +37,28 @@ def discover_functions(
         raw = chat_completion(cfg.llm, messages, max_tokens=1200, stage="func_discover")
         data = extract_json_from_llm(raw)
         functions = data.get("functions", [])
-        # Update target.functions with discovered names
-        func_names = [str(f.get("name", "")).strip() for f in functions if f.get("name")]
+        artifact = load_func_discover_artifact(
+            FuncDiscoverArtifact(
+                functions=[DiscoveredFunction(**f) for f in functions],
+                raw_text=raw,
+                llm_used=True,
+            )
+        )
+        for func in artifact.functions:
+            if not func.role:
+                func.role = "dependency" if func.dependencies else "core"
+            if not func.semantic_hint:
+                func.semantic_hint = "helper" if func.role == "dependency" else ""
+        func_names = [f.name for f in artifact.functions if f.name]
         if func_names:
             target.functions = func_names
-        return FuncDiscoverArtifact(
-            functions=functions,
-            raw_text=raw,
-            llm_used=True,
-        )
+        return artifact
     except (LlmError, Exception) as e:
         # Fallback: use the symbol itself as the only function
         if not target.functions:
             target.functions = [target.symbol]
         return FuncDiscoverArtifact(
-            functions=[{"name": target.symbol, "reason": "fallback"}],
+            functions=[DiscoveredFunction(name=target.symbol, role="core", semantic_hint="fallback")],
             raw_text=str(e),
             llm_used=False,
         )

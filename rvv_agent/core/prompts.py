@@ -219,36 +219,68 @@ anchor_hint（生成器提供的插入位置提示）：
 """
 
 
-def plan_prompt(symbol: str, functions: list[str] | None = None) -> str:
+def plan_prompt(symbol: str, functions: list[dict] | None = None) -> str:
     func_section = ""
     if functions:
-        func_list = "\n".join(f"- {f}" for f in functions)
-        func_section = f"""
-已发现的待迁移函数：
-{func_list}
-"""
+        func_lines: list[str] = []
+        for idx, func in enumerate(functions, start=1):
+            deps = func.get("dependencies", []) if isinstance(func, dict) else []
+            deps_s = ", ".join(str(x) for x in deps) if deps else "无"
+            func_lines.append(
+                f"- #{idx} name={func.get('name', '')}; role={func.get('role', '') or 'unknown'}; "
+                f"file={func.get('file', '')}; line={func.get('line', -1)}; "
+                f"dependencies={deps_s}; semantic_hint={func.get('semantic_hint', '')}"
+            )
+        func_section = "\n已发现的待迁移函数：\n" + "\n".join(func_lines) + "\n"
 
-    return f"""你是 FFmpeg RVV SIMD 迁移助手。请为迁移算子 {symbol} 生成一份具体的迁移计划。
+    return f"""你是 FFmpeg RVV SIMD 迁移助手。请为迁移算子 {symbol} 生成一份具体、可执行的迁移计划。
 {func_section}
+目标：根据函数发现结果，判断应当：
+- 一次迁移单函数，还是一次迁移多个函数；
+- 哪些函数存在依赖关系，应放入同一组或前后顺序约束；
+- 哪些函数更简单，应优先迁移（先易后难）；
+- 哪些函数只是 init/注册/胶水函数，应放到最后。
+
 要求：
-- 步骤应具体针对 {symbol}，而不是泛泛的模板
-- 必须包含：定位 C 实现、定位参考实现（x86/ARM）、生成 RVV 实现、如何集成到构建系统、运行 checkasm 验证
-- 必须输出 function_order：按依赖关系排序的函数迁移顺序
-  - .S 汇编函数优先
-  - init.c 注册函数最后
-  - Makefile 修改最后
-- 注意：每个函数迁移完成后才注册到 init.c，避免声明了接口但没有实现导致链接错误
-- 输出严格 JSON（不要额外文字）
+- 步骤必须具体针对 {symbol}，而不是泛泛模板。
+- 必须结合函数发现结果给出 function_order。
+- 必须给出 groups，每个 group 说明是一组单函数、依赖函数组、相似函数组还是困难函数组。
+- group 内函数应来自已发现函数列表，不要虚构函数。
+- 优先让 core 计算函数先于 dependency/注册函数。
+- init.c 注册函数最后，Makefile/构建集成步骤靠后。
+- 如果某些函数彼此依赖且拆开迁移风险高，可以放入同一 group。
+- 如果某些函数语义相似、难度低，可以建议批量迁移。
+- 如果某函数明显更复杂，应该放在更后。
+- 输出严格 JSON（不要额外文字）。
 
 输出格式：
 {{
   "symbol": "{symbol}",
-  "steps": [
-    "步骤1",
-    "步骤2"
+  "steps": ["步骤1", "步骤2"],
+  "function_order": ["func1", "func2"],
+  "groups": [
+    {{
+      "group_id": "group_1",
+      "group_type": "single|dependency|similar|hard",
+      "order": 1,
+      "functions": [
+        {{
+          "name": "func1",
+          "signature": "",
+          "file": "",
+          "line": -1,
+          "role": "core|dependency",
+          "dependencies": ["func0"],
+          "semantic_hint": "..."
+        }}
+      ]
+    }}
   ],
-  "function_order": ["func1_rvv", "func2_rvv"],
-  "notes": "..."
+  "acceptance_criteria": {{
+    "build_ok": true,
+    "functionally_valid": true
+  }},
+  "rationale": "说明为何这样分组、为何该顺序能体现依赖关系与先易后难策略"
 }}
 """
 
@@ -360,18 +392,30 @@ def function_discovery_prompt(symbol: str, code_context: str) -> str:
 ## 任务
 分析下面的代码上下文，找出所有属于 {symbol} 模块且适合迁移到 RVV (RISC-V Vector) 的 C 函数。
 
+你不仅要识别函数名，还要判断：
+- 该函数是否是核心计算函数（core）还是依赖/辅助函数（dependency）
+- 它依赖哪些同模块函数
+- 它的迁移难度是容易还是困难
+- 是否适合和其它函数一起批量迁移
+
 判定规则：
-- 函数必须包含可向量化的计算（循环中的数组操作、SIMD 风格运算等）
-- 排除纯控制流函数（init、alloc、free 等）
-- 排除已有 RVV 实现的函数
 - 如果 x86/ARM 参考实现中有对应的 SIMD 版本，说明该函数适合迁移
+- 函数必须包含可向量化的计算（循环中的数组操作、SIMD 风格运算等）
+- init / alloc / free / 注册 / 纯胶水函数通常不要作为核心迁移目标；如确有必要保留，可标记为 dependency
+- 排除已有 RVV 实现的函数
+- 如果某函数只是给核心函数做简单包装/拆分/共享 helper，也可以保留，但 role 要标成 dependency
+- 如果多个函数语义相近、可共享向量化模板，请在 semantic_hint 中说明 similar
+- 如果函数依赖另一个函数才能完整落地，请把被依赖函数放到 dependencies
+- 如果函数明显更复杂，请在 semantic_hint 中说明 hard/complex
 
 对每个发现的函数，输出：
 - name: 函数名（如 ff_sbr_neg_odd_64）
 - signature: 完整函数签名
 - file: 所在源文件的相对路径
 - line: 函数定义起始行号
-- reason: 为什么适合迁移
+- role: core | dependency
+- dependencies: 依赖的同模块函数名列表
+- semantic_hint: 简短说明，如 easy / similar-to-xxx / hard / init-last / helper
 
 输出严格 JSON（不要额外文字）：
 {{
@@ -382,12 +426,14 @@ def function_discovery_prompt(symbol: str, code_context: str) -> str:
       "signature": "...",
       "file": "...",
       "line": 0,
-      "reason": "..."
+      "role": "core|dependency",
+      "dependencies": ["..."],
+      "semantic_hint": "..."
     }}
   ],
   "notes": "..."
 }}
 
-## 代码上下文
-{code_context[:8000]}
+代码上下文：
+{code_context[:12000]}
 """

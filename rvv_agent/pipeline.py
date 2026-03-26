@@ -26,6 +26,7 @@ from .core.llm import get_trajectory_dict, record_trajectory_action, reset_traje
 from .core.statemachine import StateMachine
 from .core.task import (
     BuildArtifact,
+    DiscoveredFunction,
     MigrationTarget,
     MigrationTask,
     PlanArtifact,
@@ -33,6 +34,7 @@ from .core.task import (
     TaskContext,
     TaskState,
     TaskStatus,
+    load_func_discover_artifact,
 )
 from .core.util import (
     ensure_dir,
@@ -116,26 +118,22 @@ def _handle_plan_pipeline(task: TaskContext) -> TaskContext:
     """PLAN: use fixed_plan and synchronize function_order from FUNC_DISCOVER."""
     symbol = task.target.symbol
 
-    discovered_functions: list[str] = []
+    discovered_functions: list[DiscoveredFunction] = []
     try:
-        func_discover = task.load_artifact("FUNC_DISCOVER")
-        discovered_functions = [
-            str(f.get("name", "")).strip()
-            for f in func_discover.get("functions", [])
-            if f.get("name")
-        ]
+        func_discover = load_func_discover_artifact(task.load_artifact("FUNC_DISCOVER"))
+        discovered_functions = func_discover.functions
     except Exception:
         discovered_functions = []
 
     if not discovered_functions:
-        discovered_functions = task.target.functions or [symbol]
+        fallback_names = task.target.functions or [symbol]
+        discovered_functions = [DiscoveredFunction(name=name, role="core") for name in fallback_names if name]
 
-    plan = fixed_plan(symbol)
-    print(f"[pipeline] Plan: {len(plan.steps)} steps")
+    plan = fixed_plan(symbol, discovered_functions)
+    print(f"[pipeline] Plan: {len(plan.steps)} steps / {len(plan.groups)} groups")
 
     artifact = plan
-    artifact.function_order = discovered_functions
-    artifact.acceptance_criteria = {"build_ok": True}
+    artifact.acceptance_criteria = artifact.acceptance_criteria or {"build_ok": True, "functionally_valid": True}
     aid = task.save_artifact("PLAN", artifact)
     task.artifacts.plan_id = aid
     task.task.plan_id = aid

@@ -13,12 +13,12 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 
-# ---------------------------------------------------------------------------
-# Task state enum
-# ---------------------------------------------------------------------------
+T = TypeVar("T")
+
+
 
 class TaskState(Enum):
     INTENT = "INTENT"
@@ -112,9 +112,28 @@ class ReferenceCodeArtifact:
 
 
 @dataclass
+class DiscoveredFunction:
+    name: str
+    signature: str = ""
+    file: str = ""
+    line: int = -1
+    role: str = ""              # core / dependency
+    dependencies: list[str] = field(default_factory=list)
+    semantic_hint: str = ""
+
+
+@dataclass
+class FunctionGroup:
+    group_id: str
+    functions: list[DiscoveredFunction] = field(default_factory=list)
+    group_type: str = ""       # single / dependency / similar / hard
+    order: int = 0
+
+
+@dataclass
 class FuncDiscoverArtifact:
     """Output of FUNC_DISCOVER stage — discovered functions for migration."""
-    functions: list[dict] = field(default_factory=list)  # [{name, signature, file, line}]
+    functions: list[DiscoveredFunction] = field(default_factory=list)
     raw_text: str = ""
     llm_used: bool = False
 
@@ -131,10 +150,13 @@ class AnalysisArtifact:
 @dataclass
 class PlanArtifact:
     """Output of PLAN stage."""
+    plan_id: str = ""
     steps: list[str] = field(default_factory=list)
     function_order: list[str] = field(default_factory=list)
+    groups: list[FunctionGroup] = field(default_factory=list)
     acceptance_criteria: dict = field(default_factory=dict)
     refine_history: list[dict] = field(default_factory=list)
+    rationale: str = ""
 
 
 @dataclass
@@ -197,6 +219,29 @@ class DebugArtifact:
     rollback_target: str = ""   # locate | design | generate
     fix_actions: list[str] = field(default_factory=list)
     llm_suggestion: str = ""
+
+
+
+def _coerce_dataclass(cls: type[T], data: Any) -> T:
+    if isinstance(data, cls):
+        return data
+    if not isinstance(data, dict):
+        raise TypeError(f"expected {cls.__name__} dict, got {type(data).__name__}")
+    return cls(**data)
+
+
+def load_func_discover_artifact(data: Any) -> FuncDiscoverArtifact:
+    artifact = _coerce_dataclass(FuncDiscoverArtifact, data)
+    artifact.functions = [_coerce_dataclass(DiscoveredFunction, item) for item in artifact.functions]
+    return artifact
+
+
+def load_plan_artifact(data: Any) -> PlanArtifact:
+    artifact = _coerce_dataclass(PlanArtifact, data)
+    artifact.groups = [_coerce_dataclass(FunctionGroup, item) for item in artifact.groups]
+    for group in artifact.groups:
+        group.functions = [_coerce_dataclass(DiscoveredFunction, item) for item in group.functions]
+    return artifact
 
 
 @dataclass

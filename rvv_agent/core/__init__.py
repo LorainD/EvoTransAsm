@@ -17,9 +17,11 @@ from .util import (
 from .task import (
     ArtifactIndex, TaskContext, TaskState, TaskStatus, MigrationTarget,
     FunctionTask, MigrationTask,
-    FileSearchArtifact, ReferenceCodeArtifact, AnalysisArtifact, PlanArtifact,
+    FileSearchArtifact, ReferenceCodeArtifact, DiscoveredFunction, FunctionGroup,
+    FuncDiscoverArtifact, AnalysisArtifact, PlanArtifact,
     PatchPoint, PatchDesign, PatchArtifact,
     BuildArtifact, DebugArtifact, KBUpdateArtifact, TaskUpdateArtifact,
+    load_func_discover_artifact, load_plan_artifact,
 )
 from .statemachine import StateMachine
 
@@ -37,9 +39,11 @@ __all__ = [
     # task (state machine)
     "ArtifactIndex", "TaskContext", "TaskState", "TaskStatus", "MigrationTarget",
     "FunctionTask", "MigrationTask",
-    "FileSearchArtifact", "ReferenceCodeArtifact", "AnalysisArtifact", "PlanArtifact",
+    "FileSearchArtifact", "ReferenceCodeArtifact", "DiscoveredFunction", "FunctionGroup",
+    "FuncDiscoverArtifact", "AnalysisArtifact", "PlanArtifact",
     "PatchPoint", "PatchDesign", "PatchArtifact",
     "BuildArtifact", "DebugArtifact", "KBUpdateArtifact", "TaskUpdateArtifact",
+    "load_func_discover_artifact", "load_plan_artifact",
     # statemachine
     "StateMachine",
 ]

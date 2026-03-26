@@ -7,8 +7,8 @@ from pathlib import Path
 
 from .agent.chat import run_chat
 from .core.config import load_config
+from .agent.plan import fixed_plan
 from .pipeline import run_migrate
-# from .agent.generate import fixed_plan
 
 
 def _resolve_path(p: str | None) -> Path | None:

@@ -9,7 +9,7 @@ from ..core.util import CmdResult, ensure_dir, fmt_argv, write_json, write_text
 from ..tool.exec import ExecResult
 # from .analyze import AnalysisResult
 # from .plan import Plan
-from ..core.task import AnalysisArtifact,PlanArtifact
+from ..core.task import AnalysisArtifact, PlanArtifact, load_plan_artifact
 from .search import Discovery, group_files
 
 if TYPE_CHECKING:
@@ -123,12 +123,22 @@ def write_chat_report(task: "TaskContext") -> Path:
 
     # Plan
     try:
-        plan = task.load_artifact("PLAN")
-        steps = plan.get("steps", [])
+        plan = load_plan_artifact(task.load_artifact("PLAN"))
+        steps = plan.steps
         md.append("## Plan\n\n" + "\n".join(f"{i+1:02d}. {s}" for i, s in enumerate(steps)) + "\n")
-        if plan.get("refine_history"):
+        if plan.groups:
+            md.append("### Function Groups\n")
+            for group in sorted(plan.groups, key=lambda g: g.order):
+                names = ", ".join(f.name for f in group.functions if f.name)
+                md.append(f"- [{group.order}] {group.group_id} ({group.group_type or 'single'}): {names}")
+            md.append("")
+        if plan.rationale:
+            md.append("### Rationale\n")
+            md.append(plan.rationale)
+            md.append("")
+        if plan.refine_history:
             md.append("### Refine History\n")
-            for entry in plan["refine_history"]:
+            for entry in plan.refine_history:
                 md.append(f"- [{entry.get('stage', '?')}] {entry.get('feedback', '')}")
             md.append("")
     except Exception:

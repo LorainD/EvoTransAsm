@@ -192,15 +192,11 @@ def record_trajectory_action(
 
 _DEFAULT_PRICING: dict[str, tuple[float, float]] = {
     # model-name-prefix → ($/1M input, $/1M output)
-    "gpt-4o-mini": (0.15, 0.60),
-    "gpt-4o": (5.0, 15.0),
-    "gpt-4-turbo": (10.0, 30.0),
-    "gpt-4": (30.0, 60.0),
-    "gpt-3.5-turbo": (0.5, 1.5),
-    "claude-3-5-sonnet": (3.0, 15.0),
-    "claude-3-5-haiku": (0.8, 4.0),
-    "claude-3-opus": (15.0, 75.0),
-    "deepseek-chat": (0.14, 0.28),
+    "gpt-5.4":(0.3750,2.25),
+    "claude-sonnet-4-6":(0.9,4.5),
+    "claude-opus-4-6":(1.5,7.5),
+    "gemini-3-pro-preview":(1.0,6.0),
+    "gemini-3.1-pro-preview":(1.0,6.0),
 }
 
 

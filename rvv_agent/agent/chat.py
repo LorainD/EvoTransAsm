@@ -35,16 +35,20 @@ from ..core.statemachine import StateMachine
 from ..core.task import (
     AnalysisArtifact,
     BuildArtifact,
+    DiscoveredFunction,
+    FileSearchArtifact,
+    FuncDiscoverArtifact,
     KBUpdateArtifact,
     MigrationTarget,
     MigrationTask,
     PlanArtifact,
-    FileSearchArtifact,
     ReferenceCodeArtifact,
     TaskContext,
     TaskState,
     TaskStatus,
     TaskUpdateArtifact,
+    load_func_discover_artifact,
+    load_plan_artifact,
 )
 from ..core.util import (
     ensure_dir,
@@ -198,14 +202,12 @@ def handle_func_discover(task: TaskContext) -> TaskContext:
     artifact = discover_functions(task.cfg, code_context, task.target)
 
     for f in artifact.functions:
-        name = f.get("name", "?")
-        reason = f.get("reason", "")
-        print(f"  - {name}: {reason[:60]}")
+        print(f"  - {f.name}: {f.semantic_hint[:60]}")
 
     record_trajectory_action(
         "func_discover",
         f"Discovered {len(artifact.functions)} function(s)",
-        detail="\n".join(f.get("name", "") for f in artifact.functions),
+        detail="\n".join(f.name for f in artifact.functions),
     )
 
     task.save_artifact("FUNC_DISCOVER", artifact)
@@ -222,7 +224,7 @@ def handle_build_reference(task: TaskContext) -> TaskContext:
 
     try:
         func_discover = task.load_artifact("FUNC_DISCOVER")
-        discovered = [str(f.get("name", "")).strip() for f in func_discover.get("functions", []) if f.get("name")]
+        discovered = [f.name for f in load_func_discover_artifact(func_discover).functions if f.name]
     except Exception:
         discovered = []
 
@@ -271,8 +273,8 @@ def handle_analyze(task: TaskContext) -> TaskContext:
 
     # Determine function_order from plan
     try:
-        plan_data = task.load_artifact("PLAN")
-        function_order = plan_data.get("function_order", [])
+        plan_data = load_plan_artifact(task.load_artifact("PLAN"))
+        function_order = plan_data.function_order
     except Exception:
         function_order = []
     if not function_order:
@@ -410,26 +412,24 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
 
     symbol = task.target.symbol
 
-    # functions should come from FUNC_DISCOVER stage first
-    functions: list[str] = []
+    discovered_functions: list[DiscoveredFunction] = []
     try:
         func_discover = task.load_artifact("FUNC_DISCOVER")
-        functions = [
-            str(f.get("name", "")).strip()
-            for f in func_discover.get("functions", [])
-            if f.get("name")
-        ]
+        discovered_functions = load_func_discover_artifact(func_discover).functions
     except Exception:
-        functions = []
+        discovered_functions = []
 
-    if not functions:
-        functions = task.target.functions or [symbol]
+    if not discovered_functions:
+        fallback_names = task.target.functions or [symbol]
+        discovered_functions = [DiscoveredFunction(name=name, role="core") for name in fallback_names if name]
 
     print("\n正在生成迁移计划…")
-    plan = llm_plan(task.cfg, symbol, functions=functions)
+    plan = llm_plan(task.cfg, symbol, functions=discovered_functions)
     plan_steps = plan.steps
 
     print("\nPlan：")
+    migrate_mode = "多函数/分组迁移" if any(len(g.functions) > 1 for g in plan.groups) else "单函数顺序迁移"
+    print(f"  模式: {migrate_mode}")
     for i, s in enumerate(plan_steps, 1):
         print(f"  {i}. {s}")
 
@@ -437,6 +437,16 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
         print("\n函数迁移顺序：")
         for i, f in enumerate(plan.function_order, 1):
             print(f"  {i}. {f}")
+
+    if plan.groups:
+        print("\n函数分组策略：")
+        for group in sorted(plan.groups, key=lambda g: g.order):
+            names = ", ".join(f.name for f in group.functions if f.name)
+            print(f"  - [{group.order}] {group.group_id} ({group.group_type or 'single'}): {names}")
+
+    if plan.rationale:
+        print("\nPlan rationale：")
+        print(f"  {plan.rationale}")
 
     refine_history: list[dict] = []
     if not prompt_yes_no("\n确认按该 plan 继续？", default=True):
@@ -453,10 +463,13 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
 
     # Persist
     artifact = PlanArtifact(
+        plan_id=plan.plan_id,
         steps=plan_steps,
         function_order=plan.function_order,
-        acceptance_criteria={"build_ok": True},
+        groups=plan.groups,
+        acceptance_criteria=plan.acceptance_criteria or {"build_ok": True, "functionally_valid": True},
         refine_history=refine_history,
+        rationale=plan.rationale,
     )
     aid = task.save_artifact("PLAN", artifact)
     task.artifacts.plan_id = aid
@@ -776,8 +789,8 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
 
     # --- Function-level loop: advance to next function if any ---
     try:
-        plan_data = task.load_artifact("PLAN")
-        function_order = plan_data.get("function_order", [])
+        plan_data = load_plan_artifact(task.load_artifact("PLAN"))
+        function_order = plan_data.function_order
     except Exception:
         function_order = []
 
