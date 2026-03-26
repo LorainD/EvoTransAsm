@@ -133,6 +133,79 @@ def _number_lines(text: str, max_lines: int = 120) -> str:
     return "\n".join(f"{i:4d}: {l}" for i, l in enumerate(lines))
 
 
+def function_analysis_prompt(
+    function_name: str,
+    code_context: str,
+    kb_patterns: list[dict] | None = None,
+    prior_analysis: dict | None = None,
+    build_errors: str | None = None,
+) -> str:
+    """为单个 function 生成分析 prompt。
+
+    Args:
+        function_name: 函数名
+        code_context: 函数代码上下文
+        kb_patterns: 从 KB 检索到的相关 pattern 列表
+        prior_analysis: 上轮分析结果（refine 时传入）
+        build_errors: 历次构建错误
+    """
+    prior_section = ""
+    if prior_analysis:
+        import json as _json
+        prior_section = f"""
+# 上轮分析结果（请在此基础上修正，确保字段完整）：
+```json
+{_json.dumps(prior_analysis, ensure_ascii=False, indent=2)}
+```
+"""
+
+    errors_section = ""
+    if build_errors:
+        errors_section = f"""
+# 历次构建错误（参考以修正分析中对数据类型/向量长度/饱和运算等的判断）：
+{build_errors}
+"""
+
+    kb_section = ""
+    if kb_patterns:
+        import json as _json
+        kb_section = f"""
+# 知识库中的相关 pattern（可参考这些已验证的实现策略）：
+```json
+{_json.dumps(kb_patterns, ensure_ascii=False, indent=2)}
+```
+"""
+
+    return f"""任务：分析函数 {function_name} 的 RVV 迁移特性。
+
+请基于下面的上下文（来自 workspace 的完整函数体源码）输出一个严格 JSON（不要额外文字），字段如下：
+
+{{
+  "function_name": "{function_name}",
+  "datatype": "float32|float64|int16|int32|int64|uint8|uint16|uint32|mixed",
+  "vectorizable": true|false,
+  "pattern": ["butterfly", "horizontal_add", "stride_load", "saturate", "tail"],
+  "has_stride": true|false,
+  "has_saturation": true|false,
+  "reduction": true|false,
+  "tail_required": true|false,
+  "math_expression": "精准数学伪代码",
+  "c_candidates": ["path:line", ...],
+  "x86_refs": ["path:line", ...],
+  "arm_refs": ["path:line", ...],
+  "notes": "..."
+}}
+
+注意：
+- datatype 必须推断出具体类型；
+- math_expression 用精准数学伪代码表达核心运算；
+- x86_refs 和 arm_refs 应优先填写含实际 SIMD 指令的 .S / .asm 文件路径。
+{prior_section}{errors_section}{kb_section}
+上下文（完整函数体，带行号）：
+{code_context}
+"""
+
+
 def generation_prompt(symbol: str, analysis_json: str, existing_files_map: dict | None = None) -> str:
     existing_section = ""
     if existing_files_map:

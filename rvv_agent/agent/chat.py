@@ -62,6 +62,7 @@ from ..core.util import (
     write_json,
     write_text,
 )
+from dataclasses import asdict
 from ..memory.knowledge_base import KnowledgeBase, Pattern, ErrorRecord
 from ..tool.interactive import prompt_secret, prompt_text, prompt_yes_no
 
@@ -255,15 +256,33 @@ def handle_build_reference(task: TaskContext) -> TaskContext:
 
 
 def handle_analyze(task: TaskContext) -> TaskContext:
-    """ANALYZE handler: per-function semantic analysis → migration contract.
+    """ANALYZE handler: per-function semantic analysis for current group.
 
-    On first entry, sets current_function to the first function in the plan's
-    function_order. On subsequent entries (after KB_UPDATE loop-back), the
-    current_function is already advanced by handle_kb_update.
+    Loads plan, gets current group index, and analyzes only functions in that group.
     """
     from .analyze import analyze_with_llm
     from .search import Discovery
 
+    # Load plan to get current group
+    try:
+        plan_data = load_plan_artifact(task.load_artifact("PLAN"))
+    except Exception:
+        print("无法加载 PLAN，结束迁移")
+        task.current_state = TaskState.DONE
+        return task
+
+    current_group_idx = plan_data.current_group_idx
+    if current_group_idx >= len(plan_data.groups):
+        print("所有 group 已处理，迁移完成")
+        task.current_state = TaskState.DONE
+        return task
+
+    current_group = plan_data.groups[current_group_idx]
+    group_functions = current_group.functions
+    print(f"\n正在分析 Group [{current_group_idx+1}/{len(plan_data.groups)}]: {current_group.group_id}")
+    print(f"  函数: {', '.join(f.name for f in group_functions if f.name)}")
+
+    # Load reference code
     if task.artifacts.reference_code_ids:
         sub = task.artifacts.reference_code_ids[-1].split("/", 1)[-1]
         reference = task.load_artifact("BUILD_REFERENCE", sub_id=sub)
@@ -271,52 +290,42 @@ def handle_analyze(task: TaskContext) -> TaskContext:
         reference = task.load_artifact("BUILD_REFERENCE")
     code_context = reference.get("code_context", "")
 
-    # Determine function_order from plan
-    try:
-        plan_data = load_plan_artifact(task.load_artifact("PLAN"))
-        function_order = plan_data.function_order
-    except Exception:
-        function_order = []
-    if not function_order:
-        function_order = task.target.functions or [task.target.symbol]
-
-    # Set current_function if not already set (first entry)
-    if not task.target.current_function:
-        task.target.current_function = function_order[0] if function_order else task.target.symbol
-
-    cur_func = task.target.current_function
-    func_idx = function_order.index(cur_func) if cur_func in function_order else 0
-    print(f"\n正在分析函数 [{func_idx+1}/{len(function_order)}]: {cur_func}")
-
-    # Pass accumulated build errors if any (from DEBUG cycles)
+    # Accumulated build errors
     build_errors_text = "\n---\n".join(task.all_build_errors) if task.all_build_errors else None
 
-    # build_llm_context is provided by BUILD_REFERENCE artifact, matches are optional here
     discovery = Discovery(symbol=task.target.symbol, matches=[])
 
+    # Load KB
+    kb = None
+    try:
+        kb_path = task.run_dir.parent / "knowledge_base.json"
+        if kb_path.exists():
+            from ..memory.knowledge_base import KnowledgeBase
+            kb = KnowledgeBase(kb_path)
+            kb.load()
+    except Exception:
+        pass
+
+    # Analyze only current group functions
     analysis = analyze_with_llm(
         task.cfg,
         discovery,
+        functions=group_functions,
         context_override=code_context,
         build_errors=build_errors_text,
+        kb=kb,
     )
 
     record_trajectory_action(
         "analyze",
-        f"Analysis complete for {cur_func} (llm_used={analysis.llm_used})",
+        f"Analysis complete for group {current_group.group_id} (llm_used={analysis.llm_used})",
         detail=analysis.raw_text[:2000],
         event_type="human_output",
     )
 
-    # Persist
-    artifact = AnalysisArtifact(
-        analysis_json=analysis.analysis_json,
-        raw_text=analysis.raw_text,
-        llm_used=analysis.llm_used,
-    )
-    aid = task.save_artifact("ANALYZE", artifact)
+    aid = task.save_artifact("ANALYZE", analysis)
     task.artifacts.analysis_ids.append(aid)
-    write_json(task.run_dir / "analysis.json", analysis.analysis_json)
+    write_json(task.run_dir / "analysis.json", asdict(analysis))
 
     task.current_state = TaskState.PATCH
     return task
@@ -461,7 +470,7 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
         detail="\n".join(plan_steps), event_type="human_output",
     )
 
-    # Persist
+    # Persist with group execution state
     artifact = PlanArtifact(
         plan_id=plan.plan_id,
         steps=plan_steps,
@@ -470,6 +479,9 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
         acceptance_criteria=plan.acceptance_criteria or {"build_ok": True, "functionally_valid": True},
         refine_history=refine_history,
         rationale=plan.rationale,
+        current_group_idx=0,
+        completed_groups=[],
+        failed_groups=[],
     )
     aid = task.save_artifact("PLAN", artifact)
     task.artifacts.plan_id = aid
@@ -691,10 +703,22 @@ def handle_test(task: TaskContext) -> TaskContext:
 
 
 def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskContext:
-    """KB_UPDATE handler: extract patterns from successful migration."""
+    """KB_UPDATE handler: extract patterns from successful migration, advance to next group."""
     if kb is None:
         task.save_artifact("KB_UPDATE", KBUpdateArtifact())
-        task.current_state = TaskState.TASK_UPDATE
+        # Advance to next group
+        try:
+            plan_data = load_plan_artifact(task.load_artifact("PLAN"))
+            plan_data.completed_groups.append(plan_data.groups[plan_data.current_group_idx].group_id)
+            plan_data.current_group_idx += 1
+            task.save_artifact("PLAN", plan_data)
+            task.artifacts.group_iteration_count = 0
+            if plan_data.current_group_idx < len(plan_data.groups):
+                task.current_state = TaskState.ANALYZE
+            else:
+                task.current_state = TaskState.TASK_UPDATE
+        except Exception:
+            task.current_state = TaskState.TASK_UPDATE
         return task
 
     # Load analysis and file-search for richer extraction
@@ -787,26 +811,21 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
     task.save_artifact("KB_UPDATE", artifact)
     record_trajectory_action("kb_update", f"KB updated: 1 pattern, {len(new_errors)} errors")
 
-    # --- Function-level loop: advance to next function if any ---
+    # Advance to next group
     try:
         plan_data = load_plan_artifact(task.load_artifact("PLAN"))
-        function_order = plan_data.function_order
+        plan_data.completed_groups.append(plan_data.groups[plan_data.current_group_idx].group_id)
+        plan_data.current_group_idx += 1
+        task.save_artifact("PLAN", plan_data)
+        task.artifacts.group_iteration_count = 0
+
+        if plan_data.current_group_idx < len(plan_data.groups):
+            task.current_state = TaskState.ANALYZE
+        else:
+            task.current_state = TaskState.TASK_UPDATE
     except Exception:
-        function_order = []
+        task.current_state = TaskState.TASK_UPDATE
 
-    cur_func = task.target.current_function
-    if function_order and cur_func in function_order:
-        idx = function_order.index(cur_func)
-        if idx + 1 < len(function_order):
-            next_func = function_order[idx + 1]
-            print(f"\n函数 {cur_func} 迁移完成，继续下一个: {next_func} [{idx+2}/{len(function_order)}]")
-            task.target.current_function = next_func
-            # Clear build errors for the new function cycle
-            task.all_build_errors.clear()
-            task.current_state = TaskState.BUILD_REFERENCE
-            return task
-
-    task.current_state = TaskState.TASK_UPDATE
     return task
 
 

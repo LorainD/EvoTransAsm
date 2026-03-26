@@ -139,9 +139,31 @@ class FuncDiscoverArtifact:
 
 
 @dataclass
+class FunctionAnalysis:
+    """Per-function analysis result."""
+    function_name: str = ""
+    datatype: str = ""
+    vectorizable: bool = False
+    pattern: list[str] = field(default_factory=list)
+    has_stride: bool = False
+    has_saturation: bool = False
+    reduction: bool = False
+    tail_required: bool = False
+    math_expression: str = ""
+    c_candidates: list[str] = field(default_factory=list)
+    x86_refs: list[str] = field(default_factory=list)
+    arm_refs: list[str] = field(default_factory=list)
+    notes: str = ""
+    kb_pattern_ids: list[str] = field(default_factory=list)
+    kb_error_classes: list[str] = field(default_factory=list)
+
+
+@dataclass
 class AnalysisArtifact:
     """Output of ANALYZE stage — the migration contract."""
     analysis_json: dict = field(default_factory=dict)
+    per_function_analysis: dict[str, FunctionAnalysis] = field(default_factory=dict)
+    symbol: str = ""
     raw_text: str = ""
     llm_used: bool = False
     error: str | None = None
@@ -157,6 +179,9 @@ class PlanArtifact:
     acceptance_criteria: dict = field(default_factory=dict)
     refine_history: list[dict] = field(default_factory=list)
     rationale: str = ""
+    current_group_idx: int = 0
+    completed_groups: list[str] = field(default_factory=list)
+    failed_groups: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -244,6 +269,16 @@ def load_plan_artifact(data: Any) -> PlanArtifact:
     return artifact
 
 
+def load_analysis_artifact(data: Any) -> AnalysisArtifact:
+    artifact = _coerce_dataclass(AnalysisArtifact, data)
+    if artifact.per_function_analysis:
+        artifact.per_function_analysis = {
+            fname: _coerce_dataclass(FunctionAnalysis, fdata)
+            for fname, fdata in artifact.per_function_analysis.items()
+        }
+    return artifact
+
+
 @dataclass
 class KBUpdateArtifact:
     """Output of KB_UPDATE stage."""
@@ -276,6 +311,7 @@ class ArtifactIndex:
     build_run_ids: list[str] = field(default_factory=list)
     debug_run_ids: list[str] = field(default_factory=list)
     kb_update_ids: list[str] = field(default_factory=list)
+    group_iteration_count: int = 0
 
 
 # ---------------------------------------------------------------------------

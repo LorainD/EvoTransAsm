@@ -260,7 +260,35 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
     # Set rollback hint for PATCH handler
     task.rollback_hint = artifact.rollback_target
 
-    # Roll back to PATCH
+    # Check group iteration count
+    MAX_GROUP_ITERATIONS = 5
+    if task.artifacts.group_iteration_count >= MAX_GROUP_ITERATIONS:
+        print(f"\n当前 group 已达最大迭代次数 ({MAX_GROUP_ITERATIONS})，无法继续修复")
+
+        # Ask user to skip group or end
+        from ..tool.interactive import prompt_yes_no
+        if prompt_yes_no("是否跳过当前 group，进入下一 group？", default=True):
+            try:
+                from ..core.task import load_plan_artifact
+                plan_data = load_plan_artifact(task.load_artifact("PLAN"))
+                plan_data.failed_groups.append(plan_data.groups[plan_data.current_group_idx].group_id)
+                plan_data.current_group_idx += 1
+                task.save_artifact("PLAN", plan_data)
+                task.artifacts.group_iteration_count = 0
+
+                if plan_data.current_group_idx < len(plan_data.groups):
+                    task.current_state = TaskState.ANALYZE
+                else:
+                    task.current_state = TaskState.DONE
+            except Exception:
+                task.current_state = TaskState.DONE
+        else:
+            task.current_state = TaskState.DONE
+
+        return task
+
+    # Increment group iteration count and retry
+    task.artifacts.group_iteration_count += 1
     task.current_state = TaskState.PATCH
     return task
 
