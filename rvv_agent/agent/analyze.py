@@ -10,7 +10,7 @@ import json
 from dataclasses import asdict
 
 from ..core.config import AppConfig
-from ..core.llm import LlmError, LlmMessage, chat_completion
+from ..core.llm import LlmError, LlmMessage, chat_completion_with_retry
 from ..core.prompts import analysis_prompt, function_analysis_prompt, function_discovery_prompt, system_prompt
 from ..core.task import AnalysisArtifact, FuncDiscoverArtifact, FunctionAnalysis, MigrationTarget, DiscoveredFunction, load_func_discover_artifact
 from ..core.util import extract_json_from_llm
@@ -36,7 +36,7 @@ def discover_functions(
         LlmMessage(role="user", content=function_discovery_prompt(target.symbol, code_context)),
     ]
     try:
-        raw = chat_completion(cfg.llm, messages, max_tokens=1200, stage="func_discover")
+        raw = chat_completion_with_retry(cfg.llm, messages, max_tokens=1200, stage="func_discover", max_retries=3)
         data = extract_json_from_llm(raw)
         functions = data.get("functions", [])
         artifact = load_func_discover_artifact(
@@ -122,7 +122,7 @@ def analyze_with_llm(
             ),
         ]
         try:
-            raw = chat_completion(cfg.llm, messages, max_tokens=1600, stage="analyze")
+            raw = chat_completion_with_retry(cfg.llm, messages, max_tokens=1600, stage="analyze", max_retries=3)
             data = json.loads(raw)
             return AnalysisArtifact(
                 analysis_json=data,
@@ -151,6 +151,7 @@ def analyze_with_llm(
 
     # Function 粒度分析
     per_function_analysis: dict[str, FunctionAnalysis] = {}
+    llm_used_any = False
     for func in functions:
         func_name = func.name
         ctx = context_override if context_override is not None else build_llm_context(discovery)
@@ -184,7 +185,13 @@ def analyze_with_llm(
             ),
         ]
         try:
-            raw = chat_completion(cfg.llm, messages, max_tokens=1600, stage=f"analyze_{func_name}")
+            raw = chat_completion_with_retry(
+                cfg.llm,
+                messages,
+                max_tokens=1600,
+                stage=f"analyze_{func_name}",
+                max_retries=3,
+            )
             data = json.loads(raw)
             func_analysis = FunctionAnalysis(
                 function_name=func_name,
@@ -204,6 +211,7 @@ def analyze_with_llm(
                 kb_error_classes=kb_error_classes,
             )
             per_function_analysis[func_name] = func_analysis
+            llm_used_any = True
         except (LlmError, Exception) as e:
             func_analysis = FunctionAnalysis(
                 function_name=func_name,
@@ -219,7 +227,7 @@ def analyze_with_llm(
         per_function_analysis=per_function_analysis,
         symbol=discovery.symbol,
         raw_text="",
-        llm_used=True,
+        llm_used=llm_used_any,
     )
 
 

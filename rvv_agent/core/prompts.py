@@ -376,6 +376,53 @@ def plan_refine_prompt(symbol: str, current_steps: list[str], user_feedback: str
 """
 
 
+def build_plan_refine_prompt(
+    symbol: str,
+    current_groups: list[dict],
+    all_functions: list[dict],
+    user_feedback: str,
+) -> str:
+    """Build prompt for group-level plan refine.
+
+    Args:
+        symbol: 当前目标符号。
+        current_groups: 当前 plan 的 groups（可 JSON 序列化的 dict 列表）。
+        all_functions: 全部待迁移函数（可 JSON 序列化的 dict 列表）。
+        user_feedback: 用户的交互式修改意见。
+    """
+    return f"""你是 FFmpeg RVV SIMD 迁移助手。根据用户反馈修改迁移计划。
+
+目标符号：{symbol}
+
+当前 Plan Groups：
+{json.dumps(current_groups, ensure_ascii=False, indent=2)}
+
+所有待迁移函数：
+{json.dumps(all_functions, ensure_ascii=False, indent=2)}
+
+用户反馈：
+{user_feedback}
+
+请根据反馈修改 plan，输出严格 JSON（不要额外文字）：
+{{
+  "groups": [
+    {{
+      "group_id": "group_1",
+      "type": "single|dependency|similar|hard",
+      "functions": ["func_name1", "func_name2"],
+      "rationale": "为什么这样分组"
+    }}
+  ],
+  "notes": "修改说明"
+}}
+
+要求：
+- 保持所有函数都被分配到某个 group
+- 尊重函数依赖关系
+- 优先让简单函数先迁移
+"""
+
+
 def files_refine_prompt(symbol: str, current_files: list[str], user_feedback: str) -> str:
     files_s = "\n".join(f"- {f}" for f in current_files)
     return f"""当前为算子 {symbol} 选择的参考文件如下：

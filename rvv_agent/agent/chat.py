@@ -261,6 +261,7 @@ def handle_analyze(task: TaskContext) -> TaskContext:
     Loads plan, gets current group index, and analyzes only functions in that group.
     """
     from .analyze import analyze_with_llm
+    from .context_builder import ContextBuilder, ContextConfig
     from .search import Discovery
 
     # Load plan to get current group
@@ -279,6 +280,7 @@ def handle_analyze(task: TaskContext) -> TaskContext:
 
     current_group = plan_data.groups[current_group_idx]
     group_functions = current_group.functions
+    task.artifacts.group_iteration_count = 0
     print(f"\n正在分析 Group [{current_group_idx+1}/{len(plan_data.groups)}]: {current_group.group_id}")
     print(f"  函数: {', '.join(f.name for f in group_functions if f.name)}")
 
@@ -289,9 +291,6 @@ def handle_analyze(task: TaskContext) -> TaskContext:
     else:
         reference = task.load_artifact("BUILD_REFERENCE")
     code_context = reference.get("code_context", "")
-
-    # Accumulated build errors
-    build_errors_text = "\n---\n".join(task.all_build_errors) if task.all_build_errors else None
 
     discovery = Discovery(symbol=task.target.symbol, matches=[])
 
@@ -306,15 +305,46 @@ def handle_analyze(task: TaskContext) -> TaskContext:
     except Exception:
         pass
 
-    # Analyze only current group functions
-    analysis = analyze_with_llm(
-        task.cfg,
-        discovery,
-        functions=group_functions,
-        context_override=code_context,
-        build_errors=build_errors_text,
-        kb=kb,
+    # Analyze functions one-by-one with dedicated context for current group
+    builder = ContextBuilder(task, kb)
+    merged = AnalysisArtifact(
+        per_function_analysis={},
+        symbol=task.target.symbol,
+        raw_text="",
+        llm_used=False,
     )
+
+    raw_parts: list[str] = []
+    for func in group_functions:
+        func_name = func.name
+        if not func_name:
+            continue
+
+        ctx_dict = builder.build_analyze_context(
+            code_context=code_context,
+            function_name=func_name,
+            config=ContextConfig(include_kb=True, include_errors=True, include_prior_analysis=True),
+        )
+
+        prior = ctx_dict.get("prior_analysis")
+        prior_map = {func_name: prior} if prior else None
+
+        func_artifact = analyze_with_llm(
+            task.cfg,
+            discovery,
+            functions=[func],
+            context_override=ctx_dict.get("code", code_context),
+            prior_analysis=prior_map,
+            build_errors=ctx_dict.get("prior_errors"),
+            kb=kb,
+        )
+        merged.per_function_analysis.update(func_artifact.per_function_analysis)
+        merged.llm_used = merged.llm_used or func_artifact.llm_used
+        if func_artifact.raw_text:
+            raw_parts.append(func_artifact.raw_text)
+
+    merged.raw_text = "\n\n".join(raw_parts)
+    analysis = merged
 
     record_trajectory_action(
         "analyze",
@@ -417,7 +447,7 @@ def _refine_files(cfg: AppConfig, symbol: str, files: list[str],
 
 def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskContext:
     """PLAN handler: generate + refine migration plan with function ordering."""
-    from .plan import llm_plan
+    from .plan import llm_plan, refine_plan_interactive
 
     symbol = task.target.symbol
 
@@ -457,13 +487,14 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
         print("\nPlan rationale：")
         print(f"  {plan.rationale}")
 
-    refine_history: list[dict] = []
+    if prompt_yes_no("\n是否进入 plan 修改模式？", default=False):
+        plan = refine_plan_interactive(task.cfg, symbol, plan, discovered_functions)
+        plan_steps = plan.steps
+
     if not prompt_yes_no("\n确认按该 plan 继续？", default=True):
-        plan_steps = _refine_plan(task.cfg, symbol, plan_steps, history=refine_history)
-        if not plan_steps:
-            print("已取消，本轮结束。")
-            task.current_state = TaskState.DONE
-            return task
+        print("已取消，本轮结束。")
+        task.current_state = TaskState.DONE
+        return task
 
     record_trajectory_action(
         "plan", f"Plan confirmed for {symbol}",
@@ -477,7 +508,7 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
         function_order=plan.function_order,
         groups=plan.groups,
         acceptance_criteria=plan.acceptance_criteria or {"build_ok": True, "functionally_valid": True},
-        refine_history=refine_history,
+        refine_history=plan.refine_history,
         rationale=plan.rationale,
         current_group_idx=0,
         completed_groups=[],

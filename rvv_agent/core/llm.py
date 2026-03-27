@@ -397,6 +397,66 @@ def chat_completion(
     raise last_error or LlmError("LLM call failed after retries")
 
 
+def _is_retryable_llm_error(error: LlmError) -> bool:
+    """Best-effort check for whether an LlmError should be retried."""
+    if getattr(error, "retryable", False):
+        return True
+    msg = str(error).lower()
+    retryable_keywords = (
+        "timeout",
+        "timed out",
+        "connection",
+        "network",
+        "temporarily unavailable",
+        "rate limit",
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+    )
+    return any(k in msg for k in retryable_keywords)
+
+
+def chat_completion_with_retry(
+    cfg: LlmConfig,
+    messages: list[LlmMessage],
+    *,
+    max_tokens: int = 2048,
+    timeout_seconds: float = 120.0,
+    stage: str = "llm",
+    max_retries: int = 3,
+    retry_delay: float = 2.0,
+) -> str:
+    """Call LLM with stage-level retry policy and exponential backoff.
+
+    This wrapper centralizes retry behavior for call sites.
+    """
+    last_error: LlmError | None = None
+    attempts = max(1, max_retries)
+    for attempt in range(attempts):
+        try:
+            # Disable internal retry to avoid double-retry loops.
+            return chat_completion(
+                cfg,
+                messages,
+                max_tokens=max_tokens,
+                timeout_seconds=timeout_seconds,
+                stage=stage,
+                max_retries=0,
+            )
+        except LlmError as e:
+            last_error = e
+            can_retry = _is_retryable_llm_error(e)
+            if not can_retry or attempt >= attempts - 1:
+                raise
+            wait_time = retry_delay * (2 ** attempt)
+            print(f"[LLM] {stage} 失败，{wait_time:.1f}s 后重试 ({attempt + 1}/{attempts}): {str(e)[:120]}")
+            time.sleep(wait_time)
+
+    raise last_error or LlmError(f"LLM call failed after {attempts} attempts")
+
+
 def probe_llm(cfg: LlmConfig) -> dict[str, object]:
     status = llm_status(cfg)
     try:

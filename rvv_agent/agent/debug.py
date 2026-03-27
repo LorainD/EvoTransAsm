@@ -13,9 +13,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 from ..core.config import AppConfig
-from ..core.llm import LlmError, LlmMessage, chat_completion, record_trajectory_action
+from ..core.llm import LlmError, LlmMessage, chat_completion_with_retry, record_trajectory_action
 from ..core.prompts import system_prompt
 from ..core.prompts_patch import debug_classify_prompt
 from ..core.task import DebugArtifact, TaskContext, TaskState
@@ -95,6 +96,7 @@ def _llm_classify(
     cfg: AppConfig,
     error_text: str,
     current_patch: dict | None = None,
+    debug_context: dict[str, Any] | None = None,
     *,
     patch_id: str = "",
     build_run_id: str = "",
@@ -102,12 +104,25 @@ def _llm_classify(
     root_cause: str = "",
 ) -> DebugArtifact | None:
     """Call LLM for structured error diagnosis. Returns None on failure."""
+    enriched_error_text = error_text
+    if debug_context:
+        enriched_error_text = (
+            f"{error_text}\n\n## 调试上下文\n"
+            f"{json.dumps(debug_context, ensure_ascii=False, indent=2)[:2500]}"
+        )
+
     messages = [
         LlmMessage(role="system", content=system_prompt()),
-        LlmMessage(role="user", content=debug_classify_prompt(error_text, current_patch)),
+        LlmMessage(role="user", content=debug_classify_prompt(enriched_error_text, current_patch)),
     ]
     try:
-        raw = chat_completion(cfg.llm, messages, max_tokens=800, stage="debug_classify")
+        raw = chat_completion_with_retry(
+            cfg.llm,
+            messages,
+            max_tokens=800,
+            stage="debug_classify",
+            max_retries=3,
+        )
         raw = raw.strip()
         s = raw.find("{")
         e = raw.rfind("}")
@@ -185,6 +200,17 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
 
     # Consult KB for known fixes
     kb_hints: list[str] = []
+    debug_context: dict[str, Any] = {}
+    try:
+        from .context_builder import ContextBuilder, ContextConfig
+
+        debug_context = ContextBuilder(task, kb).build_debug_context(
+            error_text,
+            config=ContextConfig(include_kb=True, include_errors=True),
+        )
+    except Exception:
+        debug_context = {}
+
     if kb:
         known = kb.search_errors(error_class=error_class.value, max_results=3)
         for rec in known:
@@ -203,6 +229,7 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
             task.cfg,
             error_text,
             current_patch,
+            debug_context,
             patch_id=patch_id,
             build_run_id=build_run_id,
             iteration_no=iteration_no,

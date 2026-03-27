@@ -9,10 +9,11 @@ from collections import defaultdict
 from dataclasses import asdict
 
 from ..core.config import AppConfig
-from ..core.llm import LlmError, LlmMessage, chat_completion
-from ..core.prompts import plan_prompt, system_prompt
+from ..core.llm import LlmError, LlmMessage, chat_completion_with_retry
+from ..core.prompts import build_plan_refine_prompt, plan_prompt, system_prompt
 from ..core.task import DiscoveredFunction, FunctionGroup, PlanArtifact, load_plan_artifact
-from ..core.util import extract_json_from_llm
+from ..core.util import extract_json_from_llm, now_id
+from ..tool.interactive import prompt_text
 
 # Backward-compatible alias: historical callers import Plan from this module.
 Plan = PlanArtifact
@@ -213,7 +214,7 @@ def llm_plan(cfg: AppConfig, symbol: str, functions: list[DiscoveredFunction] | 
         LlmMessage(role="user", content=plan_prompt(symbol, prompt_functions)),
     ]
     try:
-        raw = chat_completion(cfg.llm, messages, max_tokens=1200, stage="plan")
+        raw = chat_completion_with_retry(cfg.llm, messages, max_tokens=1200, stage="plan", max_retries=3)
         data = extract_json_from_llm(raw)
         artifact = load_plan_artifact(data)
         if not artifact.steps:
@@ -221,3 +222,122 @@ def llm_plan(cfg: AppConfig, symbol: str, functions: list[DiscoveredFunction] | 
         return _validate_or_rebuild_plan(artifact, discovered, symbol)
     except (LlmError, Exception):
         return fixed_plan(symbol, discovered)
+
+
+def _print_plan_groups(plan: PlanArtifact) -> None:
+    print("\n当前 Plan Groups：")
+    for i, group in enumerate(sorted(plan.groups, key=lambda g: g.order)):
+        names = ", ".join(f.name for f in group.functions if f.name)
+        print(f"  [{i}] {group.group_id} ({group.group_type or 'single'}): {names}")
+
+
+def _llm_refine_plan(
+    cfg: AppConfig,
+    symbol: str,
+    plan: PlanArtifact,
+    functions: list[DiscoveredFunction],
+    feedback: str,
+) -> PlanArtifact:
+    current_groups = []
+    for group in sorted(plan.groups, key=lambda g: g.order):
+        func_names = [f.name for f in group.functions if f.name]
+        current_groups.append(
+            {
+                "group_id": group.group_id,
+                "type": group.group_type,
+                "functions": func_names,
+            }
+        )
+
+    all_functions = [
+        {
+            "name": f.name,
+            "role": f.role,
+            "dependencies": f.dependencies,
+            "semantic_hint": f.semantic_hint,
+        }
+        for f in functions
+    ]
+
+    prompt_text = build_plan_refine_prompt(symbol, current_groups, all_functions, feedback)
+    messages = [
+        LlmMessage(role="system", content=system_prompt()),
+        LlmMessage(role="user", content=prompt_text),
+    ]
+
+    raw = chat_completion_with_retry(
+        cfg.llm,
+        messages,
+        max_tokens=1200,
+        stage="plan_refine",
+        max_retries=3,
+    )
+    data = extract_json_from_llm(raw)
+
+    function_map = {f.name: f for f in functions if f.name}
+    assigned: set[str] = set()
+    new_groups: list[FunctionGroup] = []
+    order = 1
+    for group_data in data.get("groups", []):
+        func_names = [str(n) for n in group_data.get("functions", []) if str(n) in function_map]
+        if not func_names:
+            continue
+        group_functions = [function_map[name] for name in func_names]
+        assigned.update(func_names)
+        new_groups.append(
+            FunctionGroup(
+                group_id=str(group_data.get("group_id") or f"group_{order}"),
+                functions=group_functions,
+                group_type=str(group_data.get("type") or "single"),
+                order=order,
+            )
+        )
+        order += 1
+
+    # Ensure no function is dropped by refined output.
+    for f in functions:
+        if f.name and f.name not in assigned:
+            new_groups.append(
+                FunctionGroup(
+                    group_id=f"group_{order}",
+                    functions=[f],
+                    group_type="single",
+                    order=order,
+                )
+            )
+            order += 1
+
+    new_plan = load_plan_artifact(asdict(plan))
+    new_plan.groups = new_groups
+    new_plan.function_order = _flatten_group_order(new_groups, symbol)
+    return _validate_or_rebuild_plan(new_plan, functions, symbol)
+
+
+def refine_plan_interactive(
+    cfg: AppConfig,
+    symbol: str,
+    plan: PlanArtifact,
+    functions: list[DiscoveredFunction],
+) -> PlanArtifact:
+    """Interactive plan refine loop for group ordering and composition."""
+    while True:
+        _print_plan_groups(plan)
+        feedback = prompt_text(
+            "\n请描述修改意见（调整顺序、合并/拆分 group 等），或输入 /done 完成：\n> "
+        ).strip()
+
+        if feedback.lower() in {"/done", "/skip", ""}:
+            return plan
+
+        try:
+            plan = _llm_refine_plan(cfg, symbol, plan, functions, feedback)
+            plan.refine_history.append(
+                {
+                    "stage": "plan_refine",
+                    "feedback": feedback,
+                    "timestamp": now_id(),
+                }
+            )
+            print("✓ Plan 已更新")
+        except Exception as e:
+            print(f"修改失败: {e}，请重试")
