@@ -237,6 +237,9 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
         )
 
     if artifact is None:
+        from ..tool.interactive import prompt_yes_no
+        if not prompt_yes_no("DEBUG 的 LLM 诊断失败，是否使用规则诊断 fallback 继续？", default=False):
+            raise RuntimeError("DEBUG LLM failed and fallback rejected by user")
         artifact = DebugArtifact(
             run_id=now_id(),
             patch_id=patch_id,

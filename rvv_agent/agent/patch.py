@@ -18,7 +18,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from ..core.config import AppConfig
-from ..core.llm import LlmError, LlmMessage, chat_completion, record_trajectory_action
+from ..core.llm import LlmError, LlmMessage, chat_completion_with_retry, record_trajectory_action
 from ..core.prompts import system_prompt
 from ..core.prompts_patch import (
     patch_design_prompt,
@@ -33,6 +33,7 @@ from ..core.task import (
     TaskState,
 )
 from ..core.util import ensure_dir, now_id, write_json, write_text
+from ..tool.interactive import prompt_yes_no
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +186,7 @@ def _locate_insertion_line_llm(cfg: AppConfig, target_path: str,
         )),
     ]
     try:
-        raw = chat_completion(cfg.llm, messages, max_tokens=300, stage="patch_locate_line")
+        raw = chat_completion_with_retry(cfg.llm, messages, max_tokens=300, stage="patch_locate_line", max_retries=3)
         raw = raw.strip()
         s = raw.find("{")
         e = raw.rfind("}")
@@ -221,7 +222,7 @@ def locate_patch_points(task: TaskContext) -> list[PatchPoint]:
         )),
     ]
     try:
-        raw = chat_completion(task.cfg.llm, messages, max_tokens=1200, stage="patch_locate")
+        raw = chat_completion_with_retry(task.cfg.llm, messages, max_tokens=1200, stage="patch_locate", max_retries=3)
         data = _extract_gen_json(raw)
         points = []
         for pp in data.get("patch_points", []):
@@ -236,7 +237,10 @@ def locate_patch_points(task: TaskContext) -> list[PatchPoint]:
         record_trajectory_action("patch_locate", f"Located {len(points)} patch points")
         return points
     except (LlmError, Exception) as e:  #TODO：错误处理应该是重连而不是直接使用fallback
-        print(f"[patch] locate failed: {e}, using fallback")
+        print(f"[patch] locate failed: {e}")
+        if not prompt_yes_no("PATCH 定位失败，是否使用 fallback 锚点继续？", default=False):
+            raise
+        print("[patch] 使用 fallback 锚点继续")
         return [PatchPoint(
             file=f"libavcodec/riscv/{task.target.module}_rvv.S",
             line=-1,
@@ -263,7 +267,7 @@ def design_patch(task: TaskContext, points: list[PatchPoint],
         )),
     ]
     try:
-        raw = chat_completion(task.cfg.llm, messages, max_tokens=1200, stage="patch_design")
+        raw = chat_completion_with_retry(task.cfg.llm, messages, max_tokens=1200, stage="patch_design", max_retries=3)
         data = _extract_gen_json(raw)
         design = PatchDesign(
             changes=data.get("changes", []),
@@ -272,7 +276,10 @@ def design_patch(task: TaskContext, points: list[PatchPoint],
         record_trajectory_action("patch_design", f"Designed {len(design.changes)} changes")
         return design
     except (LlmError, Exception) as e:
-        print(f"[patch] design failed: {e}, using fallback")
+        print(f"[patch] design failed: {e}")
+        if not prompt_yes_no("PATCH 设计失败，是否使用 fallback 设计继续？", default=False):
+            raise
+        print("[patch] 使用 fallback 设计继续")
         return PatchDesign(
             changes=[{
                 "type": "create_file",
@@ -373,7 +380,7 @@ def generate_code(task: TaskContext, design: PatchDesign,
         )),
     ]
     try:
-        raw = chat_completion(task.cfg.llm, messages, max_tokens=2800, stage="patch_generate")
+        raw = chat_completion_with_retry(task.cfg.llm, messages, max_tokens=2800, stage="patch_generate", max_retries=3)
         data = _extract_gen_json(raw)
         # Normalize legacy format
         if "files" in data and "generated" not in data:
@@ -395,7 +402,10 @@ def generate_code(task: TaskContext, design: PatchDesign,
         )
         return data
     except (LlmError, Exception) as e: #TODO：错误处理应该是重连而不是直接使用placeholder
-        print(f"[patch] generate failed: {e}, using placeholder")
+        print(f"[patch] generate failed: {e}")
+        if not prompt_yes_no("PATCH 代码生成失败，是否使用 placeholder 继续？", default=False):
+            raise
+        print("[patch] 使用 placeholder 继续")
         return {
             "generated": [{
                 "target_path": f"libavcodec/riscv/{task.target.module}_rvv.S",
@@ -500,7 +510,19 @@ def _load_previous_points(task: TaskContext) -> list[PatchPoint]:
         return []
     try:
         prev = task.load_artifact("PATCH", sub_id=task.artifacts.patch_ids[-1].split("/")[-1])
-        return [PatchPoint(**pp) for pp in prev.get("points", [])]
+        points: list[PatchPoint] = []
+        for pp in prev.get("points", []):
+            if not isinstance(pp, dict):
+                continue
+            points.append(
+                PatchPoint(
+                    file=str(pp.get("file", "")),
+                    line=int(pp.get("line", -1)),
+                    surrounding_hash=str(pp.get("surrounding_hash", "")),
+                    rationale=str(pp.get("rationale", "")),
+                )
+            )
+        return points
     except Exception:
         return []
 

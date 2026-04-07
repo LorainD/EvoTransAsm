@@ -12,11 +12,33 @@ from ..core.config import AppConfig
 from ..core.llm import LlmError, LlmMessage, chat_completion_with_retry
 from ..core.prompts import build_plan_refine_prompt, plan_prompt, system_prompt
 from ..core.task import DiscoveredFunction, FunctionGroup, PlanArtifact, load_plan_artifact
-from ..core.util import extract_json_from_llm, now_id
-from ..tool.interactive import prompt_text
+from ..core.util import extract_json_from_llm, keep_dataclass_fields, keep_dataclass_fields_list, now_id
+from ..tool.interactive import prompt_text, prompt_yes_no
 
 # Backward-compatible alias: historical callers import Plan from this module.
 Plan = PlanArtifact
+
+
+def _sanitize_plan_payload(data: dict) -> dict:
+    """Keep only dataclass-defined fields to avoid unknown-key crashes."""
+    if not isinstance(data, dict):
+        return {}
+
+    cleaned = keep_dataclass_fields(data, PlanArtifact)
+    raw_groups = cleaned.get("groups", [])
+    if not isinstance(raw_groups, list):
+        cleaned["groups"] = []
+        return cleaned
+
+    groups: list[dict] = []
+    for group in raw_groups:
+        group_clean = keep_dataclass_fields(group, FunctionGroup)
+        raw_functions = group_clean.get("functions", [])
+        group_clean["functions"] = keep_dataclass_fields_list(raw_functions, DiscoveredFunction)
+        groups.append(group_clean)
+
+    cleaned["groups"] = groups
+    return cleaned
 
 
 def _difficulty_score(func: DiscoveredFunction) -> int:
@@ -215,13 +237,16 @@ def llm_plan(cfg: AppConfig, symbol: str, functions: list[DiscoveredFunction] | 
     ]
     try:
         raw = chat_completion_with_retry(cfg.llm, messages, max_tokens=1200, stage="plan", max_retries=3)
-        data = extract_json_from_llm(raw)
+        data = _sanitize_plan_payload(extract_json_from_llm(raw))
         artifact = load_plan_artifact(data)
         if not artifact.steps:
             raise ValueError("empty steps")
         return _validate_or_rebuild_plan(artifact, discovered, symbol)
-    except (LlmError, Exception):
-        return fixed_plan(symbol, discovered)
+    except (LlmError, Exception) as e:
+        print(f"[PLAN] LLM 生成计划失败: {e}")
+        if prompt_yes_no("是否使用 fixed_plan 继续？", default=False):
+            return fixed_plan(symbol, discovered)
+        raise
 
 
 def _print_plan_groups(plan: PlanArtifact) -> None:

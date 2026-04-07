@@ -6,9 +6,10 @@ import re
 from dataclasses import dataclass
 
 from ..core.config import AppConfig
-from ..core.llm import LlmError, LlmMessage, api_key_present, chat_completion
+from ..core.llm import LlmError, LlmMessage, api_key_present, chat_completion_with_retry
 from ..core.prompts import intent_prompt, system_prompt
 from ..core.task import MigrationTarget
+from ..tool.interactive import prompt_yes_no
 
 
 @dataclass
@@ -126,7 +127,7 @@ def parse_intent(cfg: AppConfig, user_text: str) -> Intent:
             LlmMessage(role="user", content=intent_prompt(user_text)),
         ]
         try:
-            raw = chat_completion(cfg.llm, messages, max_tokens=220)
+            raw = chat_completion_with_retry(cfg.llm, messages, max_tokens=220, stage="intent", max_retries=3)
             data = _extract_json(raw)
             action = str(data.get("action", "chat")).strip().lower()
             if action not in {"chat", "migrate"}:
@@ -138,10 +139,16 @@ def parse_intent(cfg: AppConfig, user_text: str) -> Intent:
             return Intent(action=action, raw=raw,
                           llm_used=True, target=target)
         except LlmError as e:
+            print(f"[INTENT] LLM 解析失败: {e}")
+            if not prompt_yes_no("是否使用启发式意图识别继续？", default=False):
+                raise
             action = "migrate" if wants_migrate else "chat"
             return Intent(action=action, raw=str(e),
                           llm_used=False, error=str(e), target=_build_target(sym) if action == "migrate" else None)
         except Exception as e:
+            print(f"[INTENT] LLM 解析异常: {e}")
+            if not prompt_yes_no("是否使用启发式意图识别继续？", default=False):
+                raise
             action = "migrate" if wants_migrate else "chat"
             return Intent(action=action, raw=repr(e),
                           llm_used=False, error=repr(e), target=_build_target(sym) if action == "migrate" else None)

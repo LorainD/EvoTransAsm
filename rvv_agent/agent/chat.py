@@ -20,7 +20,7 @@ from pathlib import Path
 from ..core.config import AppConfig
 from ..core.llm import (
     LlmMessage,
-    chat_completion,
+    chat_completion_with_retry,
     get_trajectory_dict,
     probe_llm,
     record_trajectory_action,
@@ -375,13 +375,15 @@ def _refine_plan(cfg: AppConfig, symbol: str, steps: list[str],
         if feedback.lower() in {"/skip", "/cancel"}:
             return []
         try:
-            raw = chat_completion(
+            raw = chat_completion_with_retry(
                 cfg.llm,
                 [
                     LlmMessage(role="system", content=system_prompt()),
                     LlmMessage(role="user", content=plan_refine_prompt(symbol, steps, feedback)),
                 ],
                 max_tokens=600,
+                stage="chat_refine_plan",
+                max_retries=3,
             )
             raw = raw.strip()
             start, end = raw.find("{"), raw.rfind("}")
@@ -414,13 +416,15 @@ def _refine_files(cfg: AppConfig, symbol: str, files: list[str],
         if feedback.lower() in {"/skip", "/cancel"}:
             return []
         try:
-            raw = chat_completion(
+            raw = chat_completion_with_retry(
                 cfg.llm,
                 [
                     LlmMessage(role="system", content=system_prompt()),
                     LlmMessage(role="user", content=files_refine_prompt(symbol, files, feedback)),
                 ],
                 max_tokens=600,
+                stage="chat_refine_files",
+                max_retries=3,
             )
             raw = raw.strip()
             start, end = raw.find("{"), raw.rfind("}")
@@ -934,7 +938,7 @@ def run_chat(cfg: AppConfig) -> int:
             if len(history) > 1 + 16:
                 history = [history[0], *history[-16:]]
             try:
-                reply = chat_completion(cfg.llm, history, max_tokens=800, stage="chat").strip()
+                reply = chat_completion_with_retry(cfg.llm, history, max_tokens=800, stage="chat", max_retries=3).strip()
                 print(reply + "\n")
                 history.append(LlmMessage(role="assistant", content=reply))
             except Exception as e:

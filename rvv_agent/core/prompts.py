@@ -519,7 +519,7 @@ def function_discovery_prompt(symbol: str, code_context: str) -> str:
 - 是否适合和其它函数一起批量迁移
 
 判定规则：
-- 如果 x86/ARM 参考实现中有对应的 SIMD 版本，说明该函数适合迁移
+- 只迁移x86/ARM上已有向量化实现的函数
 - 函数必须包含可向量化的计算（循环中的数组操作、SIMD 风格运算等）
 - init / alloc / free / 注册 / 纯胶水函数通常不要作为核心迁移目标；如确有必要保留，可标记为 dependency
 - 排除已有 RVV 实现的函数

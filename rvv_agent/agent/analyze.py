@@ -13,12 +13,21 @@ from ..core.config import AppConfig
 from ..core.llm import LlmError, LlmMessage, chat_completion_with_retry
 from ..core.prompts import analysis_prompt, function_analysis_prompt, function_discovery_prompt, system_prompt
 from ..core.task import AnalysisArtifact, FuncDiscoverArtifact, FunctionAnalysis, MigrationTarget, DiscoveredFunction, load_func_discover_artifact
-from ..core.util import extract_json_from_llm
+from ..core.util import extract_json_from_llm, keep_dataclass_fields_list
 from .search import Discovery, build_llm_context, group_files
 from ..memory.knowledge_base import KnowledgeBase
+from ..tool.interactive import prompt_yes_no
 
 # Backward-compatible alias: historical callers import AnalysisResult.
 # AnalysisResult = AnalysisArtifact
+
+
+def _sanitize_discovered_functions(data: dict) -> list[dict]:
+    """Keep only DiscoveredFunction fields from LLM payload."""
+    if not isinstance(data, dict):
+        return []
+    raw_functions = data.get("functions", [])
+    return keep_dataclass_fields_list(raw_functions, DiscoveredFunction)
 
 
 def discover_functions(
@@ -38,7 +47,7 @@ def discover_functions(
     try:
         raw = chat_completion_with_retry(cfg.llm, messages, max_tokens=1200, stage="func_discover", max_retries=3)
         data = extract_json_from_llm(raw)
-        functions = data.get("functions", [])
+        functions = _sanitize_discovered_functions(data)
         artifact = load_func_discover_artifact(
             FuncDiscoverArtifact(
                 functions=[DiscoveredFunction(**f) for f in functions],
@@ -56,6 +65,9 @@ def discover_functions(
             target.functions = func_names
         return artifact
     except (LlmError, Exception) as e:
+        print(f"[ANALYZE] 函数发现失败: {e}")
+        if not prompt_yes_no("函数发现失败，是否使用 fallback（仅迁移目标 symbol）继续？", default=False):
+            raise
         # Fallback: use the symbol itself as the only function
         if not target.functions:
             target.functions = [target.symbol]
@@ -131,6 +143,9 @@ def analyze_with_llm(
                 llm_used=True,
             )
         except LlmError as e:
+            print(f"[ANALYZE] 分析失败: {e}")
+            if not prompt_yes_no("分析失败，是否使用 fallback 分析继续？", default=False):
+                raise
             fb = _fallback_analysis(discovery)
             return AnalysisArtifact(
                 analysis_json=fb,
@@ -140,6 +155,9 @@ def analyze_with_llm(
                 error=str(e),
             )
         except Exception as e:
+            print(f"[ANALYZE] 分析异常: {e}")
+            if not prompt_yes_no("分析异常，是否使用 fallback 分析继续？", default=False):
+                raise
             fb = _fallback_analysis(discovery)
             return AnalysisArtifact(
                 analysis_json=fb,
@@ -213,6 +231,9 @@ def analyze_with_llm(
             per_function_analysis[func_name] = func_analysis
             llm_used_any = True
         except (LlmError, Exception) as e:
+            print(f"[ANALYZE] 函数 {func_name} 分析失败: {e}")
+            if not prompt_yes_no(f"函数 {func_name} 分析失败，是否使用该函数 fallback 继续？", default=False):
+                raise
             func_analysis = FunctionAnalysis(
                 function_name=func_name,
                 datatype="unknown",
