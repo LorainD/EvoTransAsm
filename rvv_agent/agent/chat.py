@@ -1006,7 +1006,7 @@ def handle_task_update(task: TaskContext) -> TaskContext:
     if task.artifacts.build_run_ids:
         try:
             last = task.load_artifact("BUILD", sub_id=task.artifacts.build_run_ids[-1])
-            build_ok = last.get("exitcode", -1) == 0
+            build_ok = last.get("exitcode", -1) == 0 and str(last.get("error_type", "") or "") != "rvv_missing"
         except Exception:
             build_ok = False
     else:

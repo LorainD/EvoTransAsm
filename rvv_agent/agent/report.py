@@ -207,7 +207,7 @@ def write_chat_report(task: "TaskContext") -> Path:
     if task.artifacts.build_run_ids:
         try:
             last = task.load_artifact("BUILD", sub_id=task.artifacts.build_run_ids[-1])
-            build_ok = last.get("exitcode", -1) == 0
+            build_ok = last.get("exitcode", -1) == 0 and str(last.get("error_type", "") or "") != "rvv_missing"
         except Exception:
             pass
     md.append(f"## Result\n\n- build_success: {build_ok}\n- debug_cycles: {len(task.artifacts.debug_run_ids)}\n")

@@ -210,9 +210,16 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
     error_text = extract_build_errors(latest_build.get("stdout", "") + latest_build.get("stderr", ""))
 
     if not error_text.strip():
-        print("[DEBUG] No errors found in build output, moving to TASK_UPDATE")
-        task.current_state = TaskState.TASK_UPDATE
-        return task
+        if root_cause == "rvv_missing":
+            error_text = (
+                "Build passed but rvv_missing: no real RVV instructions detected in generated implementation.\n"
+                "Treat this as semantic build failure and regenerate RVV implementation instead of empty shell."
+            )
+            print("[DEBUG] Detected rvv_missing semantic failure, forcing PATCH retry")
+        else:
+            print("[DEBUG] No errors found in build output, moving to TASK_UPDATE")
+            task.current_state = TaskState.TASK_UPDATE
+            return task
 
     error_class = classify_error(error_text)
     rollback = determine_rollback(error_class, error_text, task.cfg)

@@ -40,6 +40,7 @@ from .core.util import (
     ensure_dir,
     extract_build_errors,
     fmt_argv,
+    has_real_rvv_instructions,
     now_id,
     slug,
     write_json,
@@ -204,9 +205,25 @@ def _handle_build_pipeline(task: TaskContext) -> TaskContext:
     task.artifacts.build_run_ids.append(build_artifact.run_id)
 
     if make_result.returncode == 0:
-        print("[pipeline] 构建成功 ✓")
-        record_trajectory_action("build_success", "Build succeeded")
-        task.current_state = TaskState.KB_UPDATE
+        has_rvv = False
+        if task.artifacts.patch_ids:
+            try:
+                sub = task.artifacts.patch_ids[-1].split("/")[-1]
+                latest_patch = task.load_artifact("PATCH", sub_id=sub)
+                has_rvv = has_real_rvv_instructions(latest_patch.get("generate_plan", {}))
+            except Exception:
+                pass
+
+        if not has_rvv:
+            print("[pipeline][WARN] 构建通过但未检测到有效 RVV 指令，可能是空壳实现")
+            record_trajectory_action("build_warn", "Build passed but no real RVV instructions detected")
+            build_artifact.error_type = "rvv_missing"
+            task.save_artifact("BUILD", build_artifact, sub_id=build_artifact.run_id)
+            task.current_state = TaskState.DEBUG
+        else:
+            print("[pipeline] 构建成功 ✓")
+            record_trajectory_action("build_success", "Build succeeded")
+            task.current_state = TaskState.KB_UPDATE
     else:
         print(f"[pipeline] 构建失败 (rc={make_result.returncode})")
         error_extract = extract_build_errors(make_result.stdout + make_result.stderr)
@@ -244,7 +261,7 @@ def _derive_exec_result(task: TaskContext) -> tuple[bool, str]:
             make_rc = b.get("exitcode", -1)
 
     last_build = task.load_artifact("BUILD", sub_id=task.artifacts.build_run_ids[-1])
-    exec_failed = last_build.get("exitcode", -1) != 0
+    exec_failed = last_build.get("exitcode", -1) != 0 or str(last_build.get("error_type", "") or "") == "rvv_missing"
     exec_summary = f"configure_rc={configure_rc} checkasm_build_rc={make_rc}"
     return exec_failed, exec_summary
 

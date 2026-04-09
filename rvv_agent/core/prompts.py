@@ -301,7 +301,6 @@ def plan_prompt(symbol: str, functions: list[dict] | None = None) -> str:
             deps_s = ", ".join(str(x) for x in deps) if deps else "无"
             func_lines.append(
                 f"- #{idx} name={func.get('name', '')}; role={func.get('role', '') or 'unknown'}; "
-                f"file={func.get('file', '')}; line={func.get('line', -1)}; "
                 f"dependencies={deps_s}; semantic_hint={func.get('semantic_hint', '')}"
             )
         func_section = "\n已发现的待迁移函数：\n" + "\n".join(func_lines) + "\n"
@@ -339,9 +338,6 @@ def plan_prompt(symbol: str, functions: list[dict] | None = None) -> str:
       "functions": [
         {{
           "name": "func1",
-          "signature": "",
-          "file": "",
-          "line": -1,
           "role": "core|dependency",
           "dependencies": ["func0"],
           "semantic_hint": "..."

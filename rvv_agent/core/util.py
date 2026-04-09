@@ -294,10 +294,75 @@ def _cleanup_json_candidate(s: str) -> str:
     return s
 
 
+def _append_needed_closers(text: str) -> str:
+    """Append missing quote/bracket/brace closers for truncated JSON text."""
+    in_str = False
+    esc = False
+    stack: list[str] = []
+
+    for ch in text:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+
+        if ch == '"':
+            in_str = True
+            continue
+        if ch == "{":
+            stack.append("}")
+            continue
+        if ch == "[":
+            stack.append("]")
+            continue
+        if ch in ("}", "]") and stack and stack[-1] == ch:
+            stack.pop()
+
+    out = text
+    if in_str:
+        out += '"'
+    if stack:
+        out += "".join(reversed(stack))
+    return out
+
+
+def _recover_truncated_json_candidates(text: str) -> list[str]:
+    """Generate repaired candidates for truncated/unterminated JSON strings."""
+    if not text:
+        return []
+
+    start = text.find("{")
+    if start < 0:
+        return []
+
+    base = text[start:].rstrip()
+    cut_steps = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for cut in cut_steps:
+        if cut >= len(base):
+            continue
+        frag = base if cut == 0 else base[:-cut]
+        frag = frag.rstrip()
+        if not frag:
+            continue
+        repaired = _append_needed_closers(_cleanup_json_candidate(frag))
+        if repaired and repaired not in seen:
+            seen.add(repaired)
+            out.append(repaired)
+    return out
+
+
 def extract_json_from_llm(raw: str) -> dict:
     """Extract a JSON object from an LLM response.
 
     Handles markdown fences, leading/trailing text, and minor formatting noise.
+    Also attempts recovery for truncated outputs (e.g. unterminated string).
     """
     raw = (raw or "").strip()
     if not raw:
@@ -318,6 +383,9 @@ def extract_json_from_llm(raw: str) -> dict:
     # 3) balanced json object slices
     candidates.extend(_iter_balanced_json_objects(raw))
 
+    # 4) truncated-json recovery candidates
+    candidates.extend(_recover_truncated_json_candidates(raw))
+
     last_err: Exception | None = None
     seen: set[str] = set()
     for cand in candidates:
@@ -326,9 +394,17 @@ def extract_json_from_llm(raw: str) -> dict:
             continue
         seen.add(c)
 
-        for variant in (c, _cleanup_json_candidate(c)):
+        variants = [c, _cleanup_json_candidate(c)]
+        variants.extend(_recover_truncated_json_candidates(c))
+
+        local_seen: set[str] = set()
+        for variant in variants:
+            v = variant.strip()
+            if not v or v in local_seen:
+                continue
+            local_seen.add(v)
             try:
-                data = json.loads(variant)
+                data = json.loads(v)
                 if isinstance(data, dict):
                     return data
             except Exception as e:
@@ -338,8 +414,6 @@ def extract_json_from_llm(raw: str) -> dict:
     if isinstance(last_err, Exception):
         raise last_err
     return json.loads(raw)
-
-
 def keep_dataclass_fields(payload: dict, cls: type) -> dict:
     """Return payload filtered by dataclass field names of cls."""
     if not isinstance(payload, dict):
