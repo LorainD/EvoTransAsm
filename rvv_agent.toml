@@ -10,9 +10,10 @@
 #
 # api_key_env: 存放 API Key 的环境变量名（不要直接写 Key）
 [llm]
-# base_url    = "https://chatbox.isrc.ac.cn/api/chat/completions"
-base_url    = "https://aigc.x-see.cn/v1/chat/completions"
-model       = "gpt-5.4"
+base_url    = "https://chatbox.isrc.ac.cn/api/chat/completions"
+# base_url    = "https://aigc.x-see.cn/v1/chat/completions"
+# model       = "gpt-5.4"
+model       = "Qwen3-Coder-480B-A35B-Instruct"
 api_key_env = "LLM_API_KEY"
 temperature = 1
 

@@ -227,6 +227,8 @@ def analyze_with_llm(
                 notes=data.get("notes", ""),
                 kb_pattern_ids=kb_pattern_ids,
                 kb_error_classes=kb_error_classes,
+                migrate=int(data.get("migrate", 1)),
+                migrate_reason=str(data.get("migrate_reason", "")),
             )
             per_function_analysis[func_name] = func_analysis
             llm_used_any = True
@@ -241,6 +243,8 @@ def analyze_with_llm(
                 kb_pattern_ids=kb_pattern_ids,
                 kb_error_classes=kb_error_classes,
                 notes=f"分析失败: {str(e)[:100]}",
+                migrate=0,
+                migrate_reason="分析失败，默认跳过该函数",
             )
             per_function_analysis[func_name] = func_analysis
 

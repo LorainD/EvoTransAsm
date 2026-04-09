@@ -19,7 +19,7 @@ from ..core.config import AppConfig
 from ..core.llm import LlmError, LlmMessage, chat_completion_with_retry, record_trajectory_action
 from ..core.prompts import system_prompt
 from ..core.prompts_patch import debug_classify_prompt
-from ..core.task import DebugArtifact, TaskContext, TaskState
+from ..core.task import DebugArtifact, TaskContext, TaskState, load_plan_artifact
 from ..core.util import extract_build_errors, now_id, print_llm_error
 from ..memory.knowledge_base import KnowledgeBase
 
@@ -151,23 +151,55 @@ def _llm_classify(
 # ---------------------------------------------------------------------------
 
 _MAX_DEBUG_CYCLES = 3
+_MAX_GROUP_ITERATIONS = 3
+
+
+def _move_to_next_group_or_finish(task: TaskContext) -> TaskContext:
+    """Mark current group failed and return PLAN or TASK_UPDATE."""
+    try:
+        plan_data = load_plan_artifact(task.load_artifact("PLAN"))
+    except Exception:
+        task.current_state = TaskState.TASK_UPDATE
+        return task
+
+    if not plan_data.groups:
+        task.current_state = TaskState.TASK_UPDATE
+        return task
+
+    if plan_data.current_group_idx < len(plan_data.groups):
+        gid = plan_data.groups[plan_data.current_group_idx].group_id
+        if gid and gid not in plan_data.failed_groups:
+            plan_data.failed_groups.append(gid)
+
+    blocked = set(plan_data.completed_groups) | set(plan_data.failed_groups)
+    next_idx = None
+    for idx, group in enumerate(plan_data.groups):
+        if group.group_id not in blocked:
+            next_idx = idx
+            break
+
+    if next_idx is None:
+        task.save_artifact("PLAN", plan_data)
+        task.current_state = TaskState.TASK_UPDATE
+        return task
+
+    plan_data.current_group_idx = next_idx
+    task.save_artifact("PLAN", plan_data)
+    task.artifacts.group_iteration_count = 0
+    task.artifacts.active_group_id = ""
+    task.current_state = TaskState.PLAN
+    return task
 
 
 def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskContext:
     """DEBUG handler for the state machine.
 
-    1. Load the most recent BuildArtifact
-    2. Extract and classify the error
-    3. Consult KB for known fixes
-    4. Determine rollback target
-    5. Persist DebugArtifact
-    6. Set state back to PATCH (the PATCH handler checks rollback hints)
+    当单 group 达到阈值后，不结束 session，回到 PLAN 选择下一组继续。
     """
-    # Load latest build artifact
     build_ids = task.artifacts.build_run_ids
     if not build_ids:
-        print("[DEBUG] No build artifacts found, skipping to DONE")
-        task.current_state = TaskState.DONE
+        print("[DEBUG] No build artifacts found, skipping to TASK_UPDATE")
+        task.current_state = TaskState.TASK_UPDATE
         return task
 
     latest_build = task.load_artifact("BUILD", sub_id=build_ids[-1])
@@ -175,30 +207,19 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
     patch_id = str(latest_build.get("patch_id", ""))
     iteration_no = int(latest_build.get("iteration_no", len(build_ids)))
     root_cause = str(latest_build.get("error_type", "") or "build_failure")
-    error_text = extract_build_errors(
-        latest_build.get("stdout", "") + latest_build.get("stderr", "")
-    )
+    error_text = extract_build_errors(latest_build.get("stdout", "") + latest_build.get("stderr", ""))
 
     if not error_text.strip():
-        print("[DEBUG] No errors found in build output, moving to DONE")
-        task.current_state = TaskState.DONE
+        print("[DEBUG] No errors found in build output, moving to TASK_UPDATE")
+        task.current_state = TaskState.TASK_UPDATE
         return task
 
-    # Check debug cycle count
-    if len(task.artifacts.debug_run_ids) >= _MAX_DEBUG_CYCLES:
-        print(f"[DEBUG] 已达到最大修复次数 ({_MAX_DEBUG_CYCLES})，请人工处理")
-        print(f"  错误片段: {error_text[-500:]}")
-        task.current_state = TaskState.DONE
-        return task
-
-    # Classify
     error_class = classify_error(error_text)
     rollback = determine_rollback(error_class, error_text, task.cfg)
 
     print(f"\n[DEBUG] 错误分类: {error_class.value}")
     print(f"[DEBUG] 回滚目标: {rollback.value}")
 
-    # Consult KB for known fixes
     kb_hints: list[str] = []
     debug_context: dict[str, Any] = {}
     try:
@@ -215,10 +236,9 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
         known = kb.search_errors(error_class=error_class.value, max_results=3)
         for rec in known:
             if rec.fix_strategy:
-                kb_hints.append(f"[KB] {rec.pattern[:80]} → {rec.fix_strategy}")
+                kb_hints.append(f"[KB] {rec.pattern[:80]} -> {rec.fix_strategy}")
                 print(f"[DEBUG] 已知修复: {rec.fix_strategy[:100]}")
 
-    # Try LLM-assisted diagnosis for richer suggestions
     artifact: DebugArtifact | None = None
     if task.cfg:
         latest_patch_id = task.artifacts.patch_ids[-1] if task.artifacts.patch_ids else None
@@ -237,9 +257,6 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
         )
 
     if artifact is None:
-        from ..tool.interactive import prompt_yes_no
-        if not prompt_yes_no("DEBUG 的 LLM 诊断失败，是否使用规则诊断 fallback 继续？", default=False):
-            raise RuntimeError("DEBUG LLM failed and fallback rejected by user")
         artifact = DebugArtifact(
             run_id=now_id(),
             patch_id=patch_id,
@@ -254,10 +271,8 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
             llm_suggestion="",
         )
     elif kb_hints:
-        # Prepend KB hints to LLM-generated fix_actions
         artifact.fix_actions = kb_hints + artifact.fix_actions
 
-    # Fill required linkage fields if LLM output omitted them
     if not artifact.patch_id:
         artifact.patch_id = patch_id
     if not artifact.build_run_id:
@@ -267,7 +282,6 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
     if not artifact.root_cause:
         artifact.root_cause = root_cause
 
-    # Print suggestions
     if artifact.fix_actions:
         print("[DEBUG] 修复建议:")
         for action in artifact.fix_actions:
@@ -275,11 +289,8 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
     if artifact.llm_suggestion:
         print(f"[DEBUG] LLM 建议: {artifact.llm_suggestion[:200]}")
 
-    # Accumulate build errors for LLM context
     task.all_build_errors.append(error_text)
-
-    # Persist
-    aid = task.save_artifact("DEBUG", artifact, sub_id=artifact.run_id)
+    task.save_artifact("DEBUG", artifact, sub_id=artifact.run_id)
     task.artifacts.debug_run_ids.append(artifact.run_id)
 
     record_trajectory_action(
@@ -287,38 +298,13 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
         f"Error classified: {artifact.error_class}, rollback to {artifact.rollback_target}",
     )
 
-    # Set rollback hint for PATCH handler
-    task.rollback_hint = artifact.rollback_target
-
-    # Check group iteration count
-    MAX_GROUP_ITERATIONS = 5
-    if task.artifacts.group_iteration_count >= MAX_GROUP_ITERATIONS:
-        print(f"\n当前 group 已达最大迭代次数 ({MAX_GROUP_ITERATIONS})，无法继续修复")
-
-        # Ask user to skip group or end
-        from ..tool.interactive import prompt_yes_no
-        if prompt_yes_no("是否跳过当前 group，进入下一 group？", default=True):
-            try:
-                from ..core.task import load_plan_artifact
-                plan_data = load_plan_artifact(task.load_artifact("PLAN"))
-                plan_data.failed_groups.append(plan_data.groups[plan_data.current_group_idx].group_id)
-                plan_data.current_group_idx += 1
-                task.save_artifact("PLAN", plan_data)
-                task.artifacts.group_iteration_count = 0
-
-                if plan_data.current_group_idx < len(plan_data.groups):
-                    task.current_state = TaskState.ANALYZE
-                else:
-                    task.current_state = TaskState.DONE
-            except Exception:
-                task.current_state = TaskState.DONE
-        else:
-            task.current_state = TaskState.DONE
-
-        return task
-
-    # Increment group iteration count and retry
+    # 按组迭代计数：每次进入 DEBUG 视为一次本组尝试。
     task.artifacts.group_iteration_count += 1
+
+    if task.artifacts.group_iteration_count >= _MAX_GROUP_ITERATIONS:
+        print(f"\n[DEBUG] 当前 group 已达最大迭代次数 ({_MAX_GROUP_ITERATIONS})，回到 PLAN 选择下一组")
+        return _move_to_next_group_or_finish(task)
+    task.rollback_hint = artifact.rollback_target
     task.current_state = TaskState.PATCH
     return task
 

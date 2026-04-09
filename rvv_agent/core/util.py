@@ -6,8 +6,9 @@ import os
 import re
 import shlex
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -248,27 +249,114 @@ def extract_build_errors(output: str, tail_lines: int = 60, max_chars: int = 400
 # LLM response JSON extraction (shared across all agent modules)
 # ---------------------------------------------------------------------------
 
+def _iter_balanced_json_objects(text: str) -> list[str]:
+    """Extract balanced top-level JSON object substrings from text."""
+    objs: list[str] = []
+    in_str = False
+    esc = False
+    depth = 0
+    start = -1
+
+    for idx, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+
+        if ch == '"':
+            in_str = True
+            continue
+
+        if ch == "{":
+            if depth == 0:
+                start = idx
+            depth += 1
+            continue
+
+        if ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                objs.append(text[start: idx + 1])
+                start = -1
+
+    return objs
+
+
+def _cleanup_json_candidate(s: str) -> str:
+    # Remove trailing commas before closing braces/brackets.
+    s = _re.sub(r",\s*([}\]])", r"\1", s)
+    # Normalize common smart quotes that occasionally leak from LLM outputs.
+    s = s.replace("\u201c", '"').replace("\u201d", '"').replace("\u2018", "'").replace("\u2019", "'")
+    return s
+
+
 def extract_json_from_llm(raw: str) -> dict:
     """Extract a JSON object from an LLM response.
 
-    Handles markdown fences, leading/trailing text, etc.
+    Handles markdown fences, leading/trailing text, and minor formatting noise.
     """
-    raw = raw.strip()
-    # Strip markdown code fences
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[-1]
-        if raw.endswith("```"):
-            raw = raw.rsplit("```", 1)[0]
-        raw = raw.strip()
-    # Try direct parse first
-    if raw.startswith("{") and raw.endswith("}"):
-        return json.loads(raw)
-    # Find outermost braces
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start != -1 and end > start:
-        return json.loads(raw[start: end + 1])
+    raw = (raw or "").strip()
+    if not raw:
+        raise json.JSONDecodeError("empty response", raw, 0)
+
+    candidates: list[str] = []
+
+    # 1) fenced code blocks first
+    fence_blocks = _re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", raw, flags=_re.IGNORECASE)
+    for block in fence_blocks:
+        b = block.strip()
+        if b:
+            candidates.append(b)
+
+    # 2) whole text
+    candidates.append(raw)
+
+    # 3) balanced json object slices
+    candidates.extend(_iter_balanced_json_objects(raw))
+
+    last_err: Exception | None = None
+    seen: set[str] = set()
+    for cand in candidates:
+        c = cand.strip()
+        if not c or c in seen:
+            continue
+        seen.add(c)
+
+        for variant in (c, _cleanup_json_candidate(c)):
+            try:
+                data = json.loads(variant)
+                if isinstance(data, dict):
+                    return data
+            except Exception as e:
+                last_err = e
+                continue
+
+    if isinstance(last_err, Exception):
+        raise last_err
     return json.loads(raw)
+
+
+def keep_dataclass_fields(payload: dict, cls: type) -> dict:
+    """Return payload filtered by dataclass field names of cls."""
+    if not isinstance(payload, dict):
+        return {}
+    allowed = {f.name for f in fields(cls)}
+    return {k: v for k, v in payload.items() if k in allowed}
+
+
+def keep_dataclass_fields_list(items: list, cls: type) -> list[dict]:
+    """Filter each dict item in list by dataclass field names of cls."""
+    if not isinstance(items, list):
+        return []
+    cleaned: list[dict] = []
+    for item in items:
+        if isinstance(item, dict):
+            cleaned.append(keep_dataclass_fields(item, cls))
+    return cleaned
 
 
 def snippet_exists(existing: str, snippet: str) -> bool:

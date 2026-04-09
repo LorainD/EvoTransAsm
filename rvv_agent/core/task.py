@@ -120,6 +120,8 @@ class DiscoveredFunction:
     role: str = ""              # core / dependency
     dependencies: list[str] = field(default_factory=list)
     semantic_hint: str = ""
+    migrate: int = 1
+    skip_reason: str = ""
 
 
 @dataclass
@@ -156,6 +158,8 @@ class FunctionAnalysis:
     notes: str = ""
     kb_pattern_ids: list[str] = field(default_factory=list)
     kb_error_classes: list[str] = field(default_factory=list)
+    migrate: int = 1
+    migrate_reason: str = ""
 
 
 @dataclass
@@ -312,6 +316,7 @@ class ArtifactIndex:
     debug_run_ids: list[str] = field(default_factory=list)
     kb_update_ids: list[str] = field(default_factory=list)
     group_iteration_count: int = 0
+    active_group_id: str = ""
 
 
 # ---------------------------------------------------------------------------

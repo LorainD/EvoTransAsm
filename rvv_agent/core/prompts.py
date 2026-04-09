@@ -311,8 +311,7 @@ def plan_prompt(symbol: str, functions: list[dict] | None = None) -> str:
 目标：根据函数发现结果，判断应当：
 - 一次迁移单函数，还是一次迁移多个函数；
 - 哪些函数存在依赖关系，应放入同一组或前后顺序约束；
-- 哪些函数更简单，应优先迁移（先易后难）；
-- 哪些函数只是 init/注册/胶水函数，应放到最后。
+- 哪些函数更简单，应优先迁移（先易后难）。
 
 要求：
 - 步骤必须具体针对 {symbol}，而不是泛泛模板。
@@ -320,10 +319,11 @@ def plan_prompt(symbol: str, functions: list[dict] | None = None) -> str:
 - 必须给出 groups，每个 group 说明是一组单函数、依赖函数组、相似函数组还是困难函数组。
 - group 内函数应来自已发现函数列表，不要虚构函数。
 - 优先让 core 计算函数先于 dependency/注册函数。
-- init.c 注册函数最后，Makefile/构建集成步骤靠后。
+- init.c 每次只注册目前正在生成的函数，不要一次性注册所有已发现函数。
 - 如果某些函数彼此依赖且拆开迁移风险高，可以放入同一 group。
 - 如果某些函数语义相似、难度低，可以建议批量迁移。
 - 如果某函数明显更复杂，应该放在更后。
+- 如果生成了新的必要文件，需要更改makefile，针对makefile的修改只能添加，不能删除已有内容。
 - 输出严格 JSON（不要额外文字）。
 
 输出格式：
@@ -519,7 +519,7 @@ def function_discovery_prompt(symbol: str, code_context: str) -> str:
 - 是否适合和其它函数一起批量迁移
 
 判定规则：
-- 只迁移x86/ARM上已有向量化实现的函数
+- 重点迁移x86/ARM上已有向量化实现的函数
 - 函数必须包含可向量化的计算（循环中的数组操作、SIMD 风格运算等）
 - init / alloc / free / 注册 / 纯胶水函数通常不要作为核心迁移目标；如确有必要保留，可标记为 dependency
 - 排除已有 RVV 实现的函数

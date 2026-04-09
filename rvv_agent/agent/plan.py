@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import json
 from dataclasses import asdict
 
 from ..core.config import AppConfig
@@ -226,6 +227,28 @@ def fixed_plan(symbol: str, functions: list[DiscoveredFunction] | None = None) -
         rationale="fallback 计划：会主动区分单函数迁移与多函数批量迁移，依赖函数优先与核心函数合组，简单相似函数优先，init/注册逻辑最后处理。",
     )
 
+def _repair_plan_json_with_llm(
+    cfg: AppConfig,
+    symbol: str,
+    raw_output: str,
+    functions: list[DiscoveredFunction],
+) -> dict:
+    """Ask LLM to convert invalid output into strict plan JSON."""
+    func_names = [f.name for f in functions if f.name]
+    repair_prompt = f"""你上一次输出的 PLAN 不是合法 JSON。请修复为严格 JSON，仅输出 JSON，不要解释。\n\n目标符号: {symbol}\n函数候选: {func_names}\n\n上一次原始输出:\n{raw_output[:12000]}\n\n输出 schema:\n{{\n  \"symbol\": \"{symbol}\",\n  \"steps\": [\"...\"],\n  \"function_order\": [\"...\"],\n  \"groups\": [\n    {{\n      \"group_id\": \"group_1\",\n      \"group_type\": \"single|dependency|similar|hard\",\n      \"order\": 1,\n      \"functions\": [\n        {{\n          \"name\": \"...\",\n          \"signature\": \"\",\n          \"file\": \"\",\n          \"line\": -1,\n          \"role\": \"core|dependency\",\n          \"dependencies\": [],\n          \"semantic_hint\": \"\"\n        }}\n      ]\n    }}\n  ],\n  \"acceptance_criteria\": {{\"build_ok\": true, \"functionally_valid\": true}},\n  \"rationale\": \"...\"\n}}\n"""
+
+    repaired_raw = chat_completion_with_retry(
+        cfg.llm,
+        [
+            LlmMessage(role="system", content=system_prompt()),
+            LlmMessage(role="user", content=repair_prompt),
+        ],
+        max_tokens=1400,
+        stage="plan_repair_json",
+        max_retries=2,
+    )
+    return extract_json_from_llm(repaired_raw)
+
 
 def llm_plan(cfg: AppConfig, symbol: str, functions: list[DiscoveredFunction] | None = None) -> PlanArtifact:
     """调用 LLM 生成针对 symbol 的迁移计划，失败时回退到 fixed_plan。"""
@@ -235,9 +258,17 @@ def llm_plan(cfg: AppConfig, symbol: str, functions: list[DiscoveredFunction] | 
         LlmMessage(role="system", content=system_prompt()),
         LlmMessage(role="user", content=plan_prompt(symbol, prompt_functions)),
     ]
+
+    raw = ""
     try:
         raw = chat_completion_with_retry(cfg.llm, messages, max_tokens=1200, stage="plan", max_retries=3)
-        data = _sanitize_plan_payload(extract_json_from_llm(raw))
+        try:
+            data = extract_json_from_llm(raw)
+        except json.JSONDecodeError:
+            print("[PLAN] 首次 JSON 解析失败，尝试自动修复输出…")
+            data = _repair_plan_json_with_llm(cfg, symbol, raw, discovered)
+
+        data = _sanitize_plan_payload(data)
         artifact = load_plan_artifact(data)
         if not artifact.steps:
             raise ValueError("empty steps")
@@ -246,7 +277,7 @@ def llm_plan(cfg: AppConfig, symbol: str, functions: list[DiscoveredFunction] | 
         print(f"[PLAN] LLM 生成计划失败: {e}")
         if prompt_yes_no("是否使用 fixed_plan 继续？", default=False):
             return fixed_plan(symbol, discovered)
-        raise
+        raise RuntimeError("PLAN generation cancelled by user") from e
 
 
 def _print_plan_groups(plan: PlanArtifact) -> None:

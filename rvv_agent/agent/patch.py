@@ -555,6 +555,18 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
     hint = task.rollback_hint or ""
     task.rollback_hint = ""  # consume the hint
 
+    # Respect ANALYZE migration decision: only migrate functions marked as migrate=1.
+    try:
+        analysis = task.load_artifact("ANALYZE")
+        az = analysis.get("analysis_json", {}) if isinstance(analysis, dict) else {}
+        migratable = [str(x) for x in az.get("migratable_functions", [])] if isinstance(az, dict) else []
+        if isinstance(az, dict) and "migratable_functions" in az and not migratable:
+            print("[PATCH] 当前组无待迁移函数，跳过 PATCH，回到 PLAN")
+            task.current_state = TaskState.PLAN
+            return task
+    except Exception:
+        pass
+
     # If this is a retry (after DEBUG), rollback previous injection first
     is_retry = bool(hint)
     if is_retry:

@@ -255,16 +255,30 @@ def handle_build_reference(task: TaskContext) -> TaskContext:
     return task
 
 
-def handle_analyze(task: TaskContext) -> TaskContext:
-    """ANALYZE handler: per-function semantic analysis for current group.
+def _decide_function_migration(func, fa) -> tuple[int, str]:
+    """Heuristic migration decision: 1 migrate, 0 skip."""
+    name = (func.name or "").lower()
+    note = (fa.notes or "").lower()
+    ref_count = len(fa.x86_refs or []) + len(fa.arm_refs or []) + len(fa.c_candidates or [])
 
-    Loads plan, gets current group index, and analyzes only functions in that group.
-    """
+    if any(k in name for k in ("init", "register", "config", "setup")) and ref_count == 0:
+        return 0, "初始化/注册类函数且缺少可复用SIMD参考，当前阶段跳过"
+
+    if not fa.vectorizable and ref_count == 0 and not (fa.pattern or []):
+        return 0, "向量化收益低（无明显SIMD模式且缺少参考实现）"
+
+    if "wrapper" in note or "trivial" in note:
+        return 0, "语义上为包装/轻量胶水函数，迁移收益较低"
+
+    return 1, "保留迁移：具备向量化收益或参考价值"
+
+
+def handle_analyze(task: TaskContext) -> TaskContext:
+    """ANALYZE handler: per-function semantic analysis for current group."""
     from .analyze import analyze_with_llm
     from .context_builder import ContextBuilder, ContextConfig
     from .search import Discovery
 
-    # Load plan to get current group
     try:
         plan_data = load_plan_artifact(task.load_artifact("PLAN"))
     except Exception:
@@ -275,16 +289,21 @@ def handle_analyze(task: TaskContext) -> TaskContext:
     current_group_idx = plan_data.current_group_idx
     if current_group_idx >= len(plan_data.groups):
         print("所有 group 已处理，迁移完成")
-        task.current_state = TaskState.DONE
+        task.current_state = TaskState.TASK_UPDATE
         return task
 
     current_group = plan_data.groups[current_group_idx]
     group_functions = current_group.functions
-    task.artifacts.group_iteration_count = 0
+
+    # 仅在切组时重置迭代计数
+    active_group = getattr(task.artifacts, "active_group_id", "")
+    if active_group != current_group.group_id:
+        task.artifacts.group_iteration_count = 0
+        task.artifacts.active_group_id = current_group.group_id
+
     print(f"\n正在分析 Group [{current_group_idx+1}/{len(plan_data.groups)}]: {current_group.group_id}")
     print(f"  函数: {', '.join(f.name for f in group_functions if f.name)}")
 
-    # Load reference code
     if task.artifacts.reference_code_ids:
         sub = task.artifacts.reference_code_ids[-1].split("/", 1)[-1]
         reference = task.load_artifact("BUILD_REFERENCE", sub_id=sub)
@@ -294,7 +313,6 @@ def handle_analyze(task: TaskContext) -> TaskContext:
 
     discovery = Discovery(symbol=task.target.symbol, matches=[])
 
-    # Load KB
     kb = None
     try:
         kb_path = task.run_dir.parent / "knowledge_base.json"
@@ -305,7 +323,6 @@ def handle_analyze(task: TaskContext) -> TaskContext:
     except Exception:
         pass
 
-    # Analyze functions one-by-one with dedicated context for current group
     builder = ContextBuilder(task, kb)
     merged = AnalysisArtifact(
         per_function_analysis={},
@@ -315,6 +332,9 @@ def handle_analyze(task: TaskContext) -> TaskContext:
     )
 
     raw_parts: list[str] = []
+    migratable: list[str] = []
+    skipped_reasons: dict[str, str] = {}
+
     for func in group_functions:
         func_name = func.name
         if not func_name:
@@ -343,24 +363,58 @@ def handle_analyze(task: TaskContext) -> TaskContext:
         if func_artifact.raw_text:
             raw_parts.append(func_artifact.raw_text)
 
+        fa = merged.per_function_analysis.get(func_name)
+        if fa is None:
+            continue
+        migrate, reason = _decide_function_migration(func, fa)
+        fa.migrate = int(migrate)
+        fa.migrate_reason = reason
+        if fa.notes:
+            fa.notes = f"{fa.notes} | migrate={fa.migrate} reason={reason}"
+        else:
+            fa.notes = f"migrate={fa.migrate} reason={reason}"
+
+        if fa.migrate == 1:
+            migratable.append(func_name)
+        else:
+            skipped_reasons[func_name] = reason
+
+    merged.analysis_json = {
+        "group_id": current_group.group_id,
+        "group_functions": migratable,
+        "all_group_functions": [f.name for f in group_functions if f.name],
+        "migratable_functions": migratable,
+        "skipped_functions": skipped_reasons,
+    }
     merged.raw_text = "\n\n".join(raw_parts)
-    analysis = merged
 
     record_trajectory_action(
         "analyze",
-        f"Analysis complete for group {current_group.group_id} (llm_used={analysis.llm_used})",
-        detail=analysis.raw_text[:2000],
+        f"Analysis complete for group {current_group.group_id} (migratable={len(migratable)})",
+        detail=json.dumps(merged.analysis_json, ensure_ascii=False)[:2000],
         event_type="human_output",
     )
 
-    aid = task.save_artifact("ANALYZE", analysis)
+    aid = task.save_artifact("ANALYZE", merged)
     task.artifacts.analysis_ids.append(aid)
-    write_json(task.run_dir / "analysis.json", asdict(analysis))
+    write_json(task.run_dir / "analysis.json", asdict(merged))
+
+    if not migratable:
+        print("[ANALYZE] 本组无高价值迁移函数，跳过 PATCH/BUILD：")
+        for fn, reason in skipped_reasons.items():
+            print(f"  - {fn}: {reason}")
+
+        # 直接推进到下一组，并回到 PLAN 做继续判定
+        plan_data.completed_groups.append(current_group.group_id)
+        plan_data.current_group_idx += 1
+        task.save_artifact("PLAN", plan_data)
+        task.artifacts.group_iteration_count = 0
+        task.artifacts.active_group_id = ""
+        task.current_state = TaskState.PLAN
+        return task
 
     task.current_state = TaskState.PATCH
     return task
-
-
 
 
 def _refine_plan(cfg: AppConfig, symbol: str, steps: list[str],
@@ -449,11 +503,33 @@ def _refine_files(cfg: AppConfig, symbol: str, files: list[str],
         if prompt_yes_no("\n确认这份文件列表？", default=True):
             return files
 
+
 def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskContext:
-    """PLAN handler: generate + refine migration plan with function ordering."""
+    """PLAN handler: generate+refine plan, and resume existing plan when present."""
     from .plan import llm_plan, refine_plan_interactive
 
     symbol = task.target.symbol
+
+    # If PLAN already exists, do not regenerate. Decide next step from current_group_idx.
+    try:
+        existing = load_plan_artifact(task.load_artifact("PLAN"))
+        if existing.groups:
+            if existing.current_group_idx < len(existing.groups):
+                next_group_id = existing.groups[existing.current_group_idx].group_id
+                if getattr(task.artifacts, "active_group_id", "") != next_group_id:
+                    task.artifacts.group_iteration_count = 0
+                    task.artifacts.active_group_id = ""
+                print(
+                    f"\n继续执行已有 PLAN：Group [{existing.current_group_idx+1}/{len(existing.groups)}] "
+                    f"{existing.groups[existing.current_group_idx].group_id}"
+                )
+                task.current_state = TaskState.ANALYZE
+            else:
+                print("\nPLAN 已无待处理 group，进入 TASK_UPDATE")
+                task.current_state = TaskState.TASK_UPDATE
+            return task
+    except Exception:
+        pass
 
     discovered_functions: list[DiscoveredFunction] = []
     try:
@@ -467,12 +543,71 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
         discovered_functions = [DiscoveredFunction(name=name, role="core") for name in fallback_names if name]
 
     print("\n正在生成迁移计划…")
-    plan = llm_plan(task.cfg, symbol, functions=discovered_functions)
+    try:
+        plan = llm_plan(task.cfg, symbol, functions=discovered_functions)
+    except Exception as e:
+        print(f"[PLAN] 计划生成已取消: {e}")
+        task.current_state = TaskState.DONE
+        return task
     plan_steps = plan.steps
 
     print("\nPlan：")
     migrate_mode = "多函数/分组迁移" if any(len(g.functions) > 1 for g in plan.groups) else "单函数顺序迁移"
     print(f"  模式: {migrate_mode}")
+    for i, s in enumerate(plan_steps, 1):
+        print(f"  {i}. {s}")
+
+    if plan.function_order:
+        print("\n函数迁移顺序：")
+        for i, f in enumerate(plan.function_order, 1):
+            print(f"  {i}. {f}")
+
+    if plan.groups:
+        print("\n函数分组策略：")
+        for group in sorted(plan.groups, key=lambda g: g.order):
+            names = ", ".join(f.name for f in group.functions if f.name)
+            print(f"  - [{group.order}] {group.group_id} ({group.group_type or 'single'}): {names}")
+
+    if plan.rationale:
+        print("\nPlan rationale：")
+        print(f"  {plan.rationale}")
+
+    if prompt_yes_no("\n是否进入 plan 修改模式？", default=False):
+        plan = refine_plan_interactive(task.cfg, symbol, plan, discovered_functions)
+        plan_steps = plan.steps
+
+    if not prompt_yes_no("\n确认按该 plan 继续？", default=True):
+        print("已取消，本轮结束。")
+        task.current_state = TaskState.DONE
+        return task
+
+    record_trajectory_action(
+        "plan", f"Plan confirmed for {symbol}",
+        detail="\n".join(plan_steps), event_type="human_output",
+    )
+
+    artifact = PlanArtifact(
+        plan_id=plan.plan_id,
+        steps=plan_steps,
+        function_order=plan.function_order,
+        groups=plan.groups,
+        acceptance_criteria=plan.acceptance_criteria or {"build_ok": True, "functionally_valid": True},
+        refine_history=plan.refine_history,
+        rationale=plan.rationale,
+        current_group_idx=0,
+        completed_groups=[],
+        failed_groups=[],
+    )
+    aid = task.save_artifact("PLAN", artifact)
+    task.artifacts.plan_id = aid
+    task.task.plan_id = aid
+    task.artifacts.group_iteration_count = 0
+    task.artifacts.active_group_id = ""
+
+    task.current_state = TaskState.ANALYZE
+    return task
+
+
     for i, s in enumerate(plan_steps, 1):
         print(f"  {i}. {s}")
 
@@ -748,6 +883,7 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
             plan_data.current_group_idx += 1
             task.save_artifact("PLAN", plan_data)
             task.artifacts.group_iteration_count = 0
+            task.artifacts.active_group_id = ""
             if plan_data.current_group_idx < len(plan_data.groups):
                 task.current_state = TaskState.ANALYZE
             else:
@@ -853,6 +989,7 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
         plan_data.current_group_idx += 1
         task.save_artifact("PLAN", plan_data)
         task.artifacts.group_iteration_count = 0
+        task.artifacts.active_group_id = ""
 
         if plan_data.current_group_idx < len(plan_data.groups):
             task.current_state = TaskState.ANALYZE

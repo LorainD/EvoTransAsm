@@ -14,8 +14,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Iterable
 
 from ..core.config import AppConfig
-from ..core.llm import LlmError, LlmMessage, chat_completion
+from ..core.llm import LlmError, LlmMessage, chat_completion_with_retry
 from ..core.prompts import retrieval_prompt, system_prompt
+from ..tool.interactive import prompt_yes_no
 
 if TYPE_CHECKING:
     from .chat import Intent
@@ -416,7 +417,7 @@ def select_references(
         LlmMessage(role="user", content=retrieval_prompt(symbol, grouped, discovery.matches[:120])),
     ]
     try:
-        raw = chat_completion(cfg.llm, messages, max_tokens=900, stage="retrieve")
+        raw = chat_completion_with_retry(cfg.llm, messages, max_tokens=900, stage="retrieve", max_retries=3)
         data = _extract_retrieval_json(raw)
         if not isinstance(data, dict):
             raise ValueError("retrieval json is not dict")
@@ -431,6 +432,9 @@ def select_references(
             llm_used=True,
         )
     except LlmError as e:
+        print(f"[SEARCH] LLM 检索失败: {e}")
+        if not prompt_yes_no("是否使用 fallback 检索结果继续？", default=False):
+            raise
         fb = _fallback_selection(discovery)
         fb["existing_rvv"] = existing_rvv
         fb["_discovery"] = {"symbol": discovery.symbol, "matches": [m.__dict__ for m in discovery.matches[:200]]}
@@ -444,6 +448,9 @@ def select_references(
             error=str(e),
         )
     except Exception as e:
+        print(f"[SEARCH] LLM 检索异常: {e}")
+        if not prompt_yes_no("是否使用 fallback 检索结果继续？", default=False):
+            raise
         fb = _fallback_selection(discovery)
         fb["existing_rvv"] = existing_rvv
         fb["_discovery"] = {"symbol": discovery.symbol, "matches": [m.__dict__ for m in discovery.matches[:200]]}
