@@ -62,6 +62,65 @@ class ContextBuilder:
 
         return ctx
 
+    def build_patch_analysis_context(self) -> dict:
+        """Build a group-scoped analysis view for PATCH stage prompts."""
+        try:
+            analysis = self.task.load_artifact("ANALYZE")
+        except Exception:
+            return {}
+
+        analysis_json = analysis.get("analysis_json", {}) if isinstance(analysis, dict) else {}
+        per_func = analysis.get("per_function_analysis", {}) if isinstance(analysis, dict) else {}
+
+        group_id = ""
+        all_group_functions: list[str] = []
+        try:
+            plan = self.task.load_artifact("PLAN")
+            groups = plan.get("groups", []) if isinstance(plan, dict) else []
+            idx = int(plan.get("current_group_idx", 0)) if isinstance(plan, dict) else 0
+            if 0 <= idx < len(groups):
+                g = groups[idx] if isinstance(groups[idx], dict) else {}
+                group_id = str(g.get("group_id", "") or "")
+                funcs = g.get("functions", []) if isinstance(g, dict) else []
+                all_group_functions = [
+                    str(f.get("name", ""))
+                    for f in funcs
+                    if isinstance(f, dict) and f.get("name")
+                ]
+        except Exception:
+            pass
+
+        if not all_group_functions and isinstance(analysis_json, dict):
+            all_group_functions = [str(x) for x in analysis_json.get("all_group_functions", []) if str(x)]
+            group_id = group_id or str(analysis_json.get("group_id", "") or "")
+
+        scoped_map: dict[str, dict] = {}
+        migratable: list[str] = []
+        skipped: dict[str, str] = {}
+        for name in all_group_functions:
+            f = per_func.get(name)
+            if not isinstance(f, dict):
+                continue
+            scoped_map[name] = f
+            migrate = int(f.get("migrate", 1))
+            if migrate == 1:
+                migratable.append(name)
+            else:
+                skipped[name] = str(f.get("migrate_reason", "") or f.get("notes", ""))
+
+        if not all_group_functions and isinstance(analysis_json, dict):
+            return analysis_json
+
+        return {
+            "group_id": group_id,
+            "group_functions": migratable,
+            "all_group_functions": all_group_functions,
+            "migratable_functions": migratable,
+            "skipped_functions": skipped,
+            "function_analysis": scoped_map,
+            "symbol": analysis.get("symbol", "") if isinstance(analysis, dict) else "",
+        }
+
     def build_debug_context(
         self,
         error_text: str,

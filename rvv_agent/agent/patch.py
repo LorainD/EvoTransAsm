@@ -198,6 +198,30 @@ def _locate_insertion_line_llm(cfg: AppConfig, target_path: str,
         return -1
 
 
+
+def _build_group_scoped_analysis(task: TaskContext) -> dict:
+    """Get PATCH analysis view scoped to the current group."""
+    try:
+        from .context_builder import ContextBuilder
+
+        scoped = ContextBuilder(task).build_patch_analysis_context()
+        if isinstance(scoped, dict) and scoped:
+            return scoped
+    except Exception:
+        pass
+
+    try:
+        analysis = task.load_artifact("ANALYZE")
+        if isinstance(analysis, dict):
+            az = analysis.get("analysis_json", {})
+            if isinstance(az, dict):
+                return az
+    except Exception:
+        pass
+
+    return {}
+
+
 # ---------------------------------------------------------------------------
 # Step 1: Locate patch points
 # ---------------------------------------------------------------------------
@@ -210,13 +234,13 @@ def locate_patch_points(task: TaskContext) -> list[PatchPoint]:
         reference = task.load_artifact("BUILD_REFERENCE", sub_id=sub)
     else:
         reference = task.load_artifact("BUILD_REFERENCE")
-    analysis = task.load_artifact("ANALYZE")
+    analysis_json = _build_group_scoped_analysis(task)
 
     messages = [
         LlmMessage(role="system", content=system_prompt()),
         LlmMessage(role="user", content=patch_locate_prompt(
             symbol=task.target.symbol,
-            analysis_json=analysis.get("analysis_json", {}),
+            analysis_json=analysis_json,
             selected_files=file_search.get("selected_files", []),
             code_context=reference.get("code_context", ""),
         )),
@@ -255,13 +279,13 @@ def locate_patch_points(task: TaskContext) -> list[PatchPoint]:
 def design_patch(task: TaskContext, points: list[PatchPoint],
                  kb_patterns: list[dict] | None = None) -> PatchDesign:
     """LLM decides what changes to make (without generating code yet)."""
-    analysis = task.load_artifact("ANALYZE")
+    analysis_json = _build_group_scoped_analysis(task)
 
     messages = [
         LlmMessage(role="system", content=system_prompt()),
         LlmMessage(role="user", content=patch_design_prompt(
             symbol=task.target.symbol,
-            analysis_json=analysis.get("analysis_json", {}),
+            analysis_json=analysis_json,
             patch_points=[asdict(p) for p in points],
             kb_patterns=kb_patterns,
         )),
@@ -302,7 +326,7 @@ def generate_code(task: TaskContext, design: PatchDesign,
     On retry (after DEBUG), includes build errors, debug suggestions, and the
     previous failing code in the prompt so the LLM can produce a targeted fix.
     """
-    analysis = task.load_artifact("ANALYZE")
+    analysis_json = _build_group_scoped_analysis(task)
     file_search = task.load_artifact("SEARCH_FILE")
     if task.artifacts.reference_code_ids:
         sub = task.artifacts.reference_code_ids[-1].split("/", 1)[-1]
@@ -370,7 +394,7 @@ def generate_code(task: TaskContext, design: PatchDesign,
         LlmMessage(role="system", content=system_prompt()),
         LlmMessage(role="user", content=patch_generate_prompt(
             symbol=task.target.symbol,
-            analysis_json=analysis.get("analysis_json", {}),
+            analysis_json=analysis_json,
             design=asdict(design),
             existing_files_map=existing_map or None,
             build_errors=build_errors_text,

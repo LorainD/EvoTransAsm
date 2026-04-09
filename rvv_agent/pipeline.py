@@ -82,8 +82,19 @@ def _handle_retrieve_pipeline(task: TaskContext) -> TaskContext:
     """SEARCH_FILE: search + select references, no user interaction."""
     ffmpeg_root = task.ffmpeg_root
     symbol = task.target.symbol
+    module = task.target.module
 
     file_search = select_references(task.cfg, ffmpeg_root, symbol)
+    if module and module != symbol:
+        file_search_mod = select_references(task.cfg, ffmpeg_root, module)
+        for k in ("c", "x86", "arm", "riscv", "headers", "makefiles", "checkasm"):
+            sym_list = file_search.selected_json.get(k, [])
+            mod_list = file_search_mod.selected_json.get(k, [])
+            file_search.selected_json[k] = list(dict.fromkeys(sym_list + mod_list))
+        mod_existing = file_search_mod.selected_json.get("existing_rvv", [])
+        sym_existing = file_search.selected_json.get("existing_rvv", [])
+        file_search.selected_json["existing_rvv"] = list(dict.fromkeys(sym_existing + mod_existing))
+
     write_text(task.run_dir / "retrieval_raw.txt", file_search.raw_text + "\n")
     selected = file_search.selected_json
 

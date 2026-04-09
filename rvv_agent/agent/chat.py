@@ -48,6 +48,7 @@ from ..core.task import (
     TaskStatus,
     TaskUpdateArtifact,
     load_func_discover_artifact,
+    load_analysis_artifact,
     load_plan_artifact,
 )
 from ..core.util import (
@@ -331,6 +332,18 @@ def handle_analyze(task: TaskContext) -> TaskContext:
         llm_used=False,
     )
 
+    aggregated_groups: dict[str, dict] = {}
+    try:
+        prev = load_analysis_artifact(task.load_artifact("ANALYZE"))
+        merged.per_function_analysis.update(prev.per_function_analysis)
+        merged.llm_used = merged.llm_used or prev.llm_used
+        if isinstance(prev.analysis_json, dict):
+            prev_groups = prev.analysis_json.get("groups", {})
+            if isinstance(prev_groups, dict):
+                aggregated_groups.update(prev_groups)
+    except Exception:
+        pass
+
     raw_parts: list[str] = []
     migratable: list[str] = []
     skipped_reasons: dict[str, str] = {}
@@ -379,10 +392,24 @@ def handle_analyze(task: TaskContext) -> TaskContext:
         else:
             skipped_reasons[func_name] = reason
 
-    merged.analysis_json = {
+    group_view = {
         "group_id": current_group.group_id,
         "group_functions": migratable,
         "all_group_functions": [f.name for f in group_functions if f.name],
+        "migratable_functions": migratable,
+        "skipped_functions": skipped_reasons,
+    }
+    aggregated_groups[current_group.group_id] = group_view
+
+    # Keep top-level fields for backward compatibility while preserving full aggregation.
+    merged.analysis_json = {
+        "symbol": task.target.symbol,
+        "current_group_id": current_group.group_id,
+        "current_group": group_view,
+        "groups": aggregated_groups,
+        "group_id": current_group.group_id,
+        "group_functions": migratable,
+        "all_group_functions": group_view["all_group_functions"],
         "migratable_functions": migratable,
         "skipped_functions": skipped_reasons,
     }
@@ -391,7 +418,7 @@ def handle_analyze(task: TaskContext) -> TaskContext:
     record_trajectory_action(
         "analyze",
         f"Analysis complete for group {current_group.group_id} (migratable={len(migratable)})",
-        detail=json.dumps(merged.analysis_json, ensure_ascii=False)[:2000],
+        detail=json.dumps(group_view, ensure_ascii=False)[:2000],
         event_type="human_output",
     )
 
@@ -415,7 +442,6 @@ def handle_analyze(task: TaskContext) -> TaskContext:
 
     task.current_state = TaskState.PATCH
     return task
-
 
 def _refine_plan(cfg: AppConfig, symbol: str, steps: list[str],
                  history: list[dict] | None = None) -> list[str]:

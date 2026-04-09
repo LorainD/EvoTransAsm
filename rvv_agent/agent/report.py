@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..core.util import CmdResult, ensure_dir, fmt_argv, write_json, write_text
 from ..tool.exec import ExecResult
-# from .analyze import AnalysisResult
-# from .plan import Plan
 from ..core.task import AnalysisArtifact, PlanArtifact, load_plan_artifact
 from .search import Discovery, group_files
 
@@ -102,7 +101,7 @@ def write_report(
         "symbol": discovery.symbol,
         "matches": [m.__dict__ for m in discovery.matches],
     })
-    write_json(run_dir / "analysis.json", analysis.analysis_json)
+    write_json(run_dir / "analysis.json", asdict(analysis))
 
     return report_path
 
@@ -159,6 +158,15 @@ def write_chat_report(task: "TaskContext") -> Path:
         md.append("## Analysis\n\n```json\n"
                    + json.dumps(analysis.get("analysis_json", {}), ensure_ascii=False, indent=2)
                    + "\n```\n")
+        analysis_json = analysis.get("analysis_json", {}) if isinstance(analysis, dict) else {}
+        if isinstance(analysis_json, dict):
+            groups = analysis_json.get("groups", {})
+            current_group_id = analysis_json.get("current_group_id", "")
+            if isinstance(groups, dict) and groups:
+                md.append(f"- groups_analyzed: {len(groups)}")
+            if current_group_id:
+                md.append(f"- current_group_id: {current_group_id}")
+            md.append("")
     except Exception:
         pass
 
