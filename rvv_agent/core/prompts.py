@@ -62,6 +62,25 @@ def retrieval_prompt(symbol: str, grouped: dict, matches: list) -> str:
 - **x86** 和 **arm** 列表中必须优先包含 .S / .asm 等实际 SIMD 实现文件（如 sbrdsp.asm、sbrdsp_neon.S），
   而不仅仅是 *_init*.c 注册文件——*_init*.c 只是函数指针赋值，真正的向量实现在汇编文件里。
 - 若 x86_refs 或 arm_refs 中同时有 init.c 和 .S/.asm，请把 .S/.asm 放在前面。
+- 当 x86_refs 明显偏少时，可优先利用模块近义词（如 h264pred -> h264）补充 x86 汇编文件。
+"""
+
+
+def retrieval_alias_prompt(symbol: str, module: str, base_terms: list[str]) -> str:
+    base_s = json.dumps(base_terms, ensure_ascii=False)
+    return f"""你将为 FFmpeg 检索阶段生成少量命名别名词（alias），用于补充 x86/arm/aarch64 汇编文件召回。
+
+目标 symbol：{symbol}
+目标 module：{module}
+已有检索词：{base_s}
+
+要求：
+- 只输出 0-5 个 alias，尽量短（如 h264、pred、intra）。
+- alias 仅用于补充汇编文件检索，不要输出通用噪声词。
+- 若没有高置信 alias，返回空数组。
+
+严格输出 JSON：
+{{"aliases": ["..."]}}
 """
 
 

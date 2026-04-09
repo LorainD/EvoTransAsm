@@ -132,20 +132,8 @@ def handle_retrieve(task: TaskContext) -> TaskContext:
 
     ffmpeg_root = task.ffmpeg_root
     symbol = task.target.symbol
-    module = task.target.module
-
-    # 分层检索：先用 module 再用 symbol，合并去重
+    # select_references 内部会自动执行 symbol+module 合并检索
     file_search = select_references(task.cfg, ffmpeg_root, symbol)
-    if module and module != symbol:
-        file_search_mod = select_references(task.cfg, ffmpeg_root, module)
-        for k in ("c", "x86", "arm", "riscv", "headers", "makefiles", "checkasm"):
-            sym_list = file_search.selected_json.get(k, [])
-            mod_list = file_search_mod.selected_json.get(k, [])
-            merged = list(dict.fromkeys(sym_list + mod_list))
-            file_search.selected_json[k] = merged
-        mod_existing = file_search_mod.selected_json.get("existing_rvv", [])
-        sym_existing = file_search.selected_json.get("existing_rvv", [])
-        file_search.selected_json["existing_rvv"] = list(dict.fromkeys(sym_existing + mod_existing))
 
     write_text(task.run_dir / "retrieval_raw.txt", file_search.raw_text + "\n")
     selected = file_search.selected_json

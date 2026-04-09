@@ -19,7 +19,7 @@ from .task import TaskContext, TaskState
 HandlerFn = Callable[[TaskContext], TaskContext]
 
 # Maximum iterations to guard against infinite loops (e.g. DEBUG ↔ PATCH).
-_MAX_ITERATIONS = 30
+_MAX_ITERATIONS = 50
 
 
 class StateMachine:

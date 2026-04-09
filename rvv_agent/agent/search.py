@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Iterable
 
 from ..core.config import AppConfig
 from ..core.llm import LlmError, LlmMessage, chat_completion_with_retry
-from ..core.prompts import retrieval_prompt, system_prompt
+from ..core.prompts import retrieval_alias_prompt, retrieval_prompt, system_prompt
 from ..tool.interactive import prompt_yes_no
 
 if TYPE_CHECKING:
@@ -67,17 +67,30 @@ def find_symbol_multi(
     seen_lines: dict[str, set[int]] = {}
     all_matches: list[Match] = []
     for term in terms:
+        term = str(term or "").strip()
+        if not term:
+            continue
+        term_lower = term.lower()
         token_re = re.compile(r"\b" + re.escape(term) + r"\b")
         for file in _iter_source_files(ffmpeg_root):
             rel = str(file.relative_to(ffmpeg_root)).replace("\\", "/")
+            rel_lower = rel.lower()
+            is_asm_file = file.suffix in {".S", ".s", ".asm"}
+            lines_seen = seen_lines.setdefault(rel, set())
+
+            path_hit = is_asm_file and (term_lower in rel_lower)
+            if path_hit and 1 not in lines_seen:
+                lines_seen.add(1)
+                all_matches.append(Match(file=rel, line=1, text=f"[path-match] {Path(rel).name}"))
+                if len(all_matches) >= max_matches:
+                    return Discovery(symbol=primary or (terms[0] if terms else ""), matches=all_matches)
+
             try:
                 text = file.read_text(encoding="utf-8", errors="replace")
             except Exception:
                 continue
-            if term not in text:
+            if (not path_hit) and (term not in text):
                 continue
-            is_asm_file = file.suffix in {".S", ".s", ".asm"}
-            lines_seen = seen_lines.setdefault(rel, set())
             for i, line in enumerate(text.splitlines(), start=1):
                 if i in lines_seen:
                     continue
@@ -85,25 +98,41 @@ def find_symbol_multi(
                     lines_seen.add(i)
                     all_matches.append(Match(file=rel, line=i, text=line.strip()))
                     if len(all_matches) >= max_matches:
-                        return Discovery(symbol=primary or terms[0], matches=all_matches)
-    return Discovery(symbol=primary or terms[0], matches=all_matches)
+                        return Discovery(symbol=primary or (terms[0] if terms else ""), matches=all_matches)
+    return Discovery(symbol=primary or (terms[0] if terms else ""), matches=all_matches)
 
 
 def find_symbol(ffmpeg_root: Path, symbol: str, *, max_matches: int = 400) -> Discovery:
     token_re = re.compile(r"\b" + re.escape(symbol) + r"\b")
+    symbol_lower = symbol.lower()
     matches: list[Match] = []
+    seen_lines: dict[str, set[int]] = {}
     for file in _iter_source_files(ffmpeg_root):
+        rel = str(file.relative_to(ffmpeg_root)).replace("\\", "/")
+        rel_lower = rel.lower()
+        is_asm_file = file.suffix in {".S", ".s", ".asm"}
+        lines_seen = seen_lines.setdefault(rel, set())
+
+        path_hit = is_asm_file and (symbol_lower in rel_lower)
+        if path_hit and 1 not in lines_seen:
+            lines_seen.add(1)
+            matches.append(Match(file=rel, line=1, text=f"[path-match] {Path(rel).name}"))
+            if len(matches) >= max_matches:
+                return Discovery(symbol=symbol, matches=matches)
+
         try:
             text = file.read_text(encoding="utf-8", errors="replace")
         except Exception:
             continue
-        if symbol not in text:
+        if (not path_hit) and symbol not in text:
             continue
-        is_asm_file = file.suffix in {".S", ".s", ".asm"}
         for i, line in enumerate(text.splitlines(), start=1):
+            if i in lines_seen:
+                continue
             if (is_asm_file and symbol in line) or (not is_asm_file and token_re.search(line)):
+                lines_seen.add(i)
                 matches.append(Match(
-                    file=str(file.relative_to(ffmpeg_root)).replace("\\", "/"),
+                    file=rel,
                     line=i,
                     text=line.strip(),
                 ))
@@ -388,6 +417,95 @@ def _scan_existing_rvv(ffmpeg_root: Path, module: str) -> list[str]:
     return found
 
 
+def _extract_alias_terms_with_llm(
+    cfg: AppConfig,
+    symbol: str,
+    module: str,
+    base_terms: list[str],
+) -> list[str]:
+    """Use a tiny LLM call to propose a few asm-oriented alias terms."""
+    if not symbol and not module:
+        return []
+    try:
+        messages = [
+            LlmMessage(role="system", content=system_prompt()),
+            LlmMessage(role="user", content=retrieval_alias_prompt(symbol, module, base_terms)),
+        ]
+        raw = chat_completion_with_retry(cfg.llm, messages, max_tokens=220, stage="retrieve_alias", max_retries=2)
+        data = _extract_retrieval_json(raw)
+        aliases = data.get("aliases", []) if isinstance(data, dict) else []
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for a in aliases if isinstance(aliases, list) else []:
+            s = str(a or "").strip()
+            if not s:
+                continue
+            key = s.lower()
+            if key in seen:
+                continue
+            if key in {symbol.lower(), module.lower()}:
+                continue
+            if len(s) > 24:
+                continue
+            seen.add(key)
+            cleaned.append(s)
+            if len(cleaned) >= 5:
+                break
+        return cleaned
+    except Exception:
+        return []
+
+
+def _find_arch_asm_alias_matches(
+    ffmpeg_root: Path,
+    alias_terms: list[str],
+    *,
+    max_matches: int = 120,
+) -> list[Match]:
+    """Supplement matches for x86/arm/aarch64 asm files using alias terms."""
+    terms = [str(t or "").strip() for t in alias_terms if str(t or "").strip()]
+    if not terms:
+        return []
+
+    matches: list[Match] = []
+    seen_lines: dict[str, set[int]] = {}
+    for file in _iter_source_files(ffmpeg_root):
+        if file.suffix not in {".S", ".s", ".asm"}:
+            continue
+        rel = str(file.relative_to(ffmpeg_root)).replace("\\", "/")
+        rel_lower = rel.lower()
+        if not any(x in rel_lower for x in ("/x86/", "/arm/", "/aarch64/")):
+            continue
+
+        lines_seen = seen_lines.setdefault(rel, set())
+        try:
+            text = file.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            text = ""
+        lines = text.splitlines() if text else []
+
+        for term in terms:
+            term_lower = term.lower()
+            path_hit = term_lower in rel_lower
+            if path_hit and 1 not in lines_seen:
+                lines_seen.add(1)
+                matches.append(Match(file=rel, line=1, text=f"[alias-path] {Path(rel).name}"))
+                if len(matches) >= max_matches:
+                    return matches
+
+            if text and (term in text):
+                for i, line in enumerate(lines, start=1):
+                    if i in lines_seen:
+                        continue
+                    if term in line:
+                        lines_seen.add(i)
+                        matches.append(Match(file=rel, line=i, text=line.strip()))
+                        if len(matches) >= max_matches:
+                            return matches
+
+    return matches
+
+
 def select_references(
     cfg: AppConfig,
     ffmpeg_root: Path,
@@ -395,19 +513,38 @@ def select_references(
 ) -> FileSearchArtifact:
     """LLM 辅助筛选参考文件。"""
     if isinstance(intent_or_symbol, str):
-        symbol = intent_or_symbol
-        module = intent_or_symbol
-        terms = [symbol]
+        symbol = str(intent_or_symbol or "").strip()
+        module = symbol.split(".")[0] if "." in symbol else symbol
+        terms = [t for t in [symbol, module] if t]
     else:
-        symbol = intent_or_symbol.symbol
-        module = intent_or_symbol.module
-        terms = intent_or_symbol.search_terms
+        symbol = str(intent_or_symbol.symbol or "").strip()
+        module = str(intent_or_symbol.module or "").strip()
+        if not module and symbol:
+            module = symbol.split(".")[0] if "." in symbol else symbol
+        raw_terms = [symbol, module, *list(intent_or_symbol.search_terms or [])]
+        terms = list(dict.fromkeys(t for t in (str(x).strip() for x in raw_terms) if t))
+
+    alias_terms = _extract_alias_terms_with_llm(cfg, symbol, module, terms)
 
     existing_rvv = _scan_existing_rvv(ffmpeg_root, module)
     if len(terms) > 1:
         discovery = find_symbol_multi(ffmpeg_root, terms, primary=symbol)
     else:
         discovery = find_symbol(ffmpeg_root, symbol)
+
+    if alias_terms:
+        alias_matches = _find_arch_asm_alias_matches(ffmpeg_root, alias_terms)
+        if alias_matches:
+            merged_matches = list(discovery.matches)
+            seen = {(m.file, m.line) for m in merged_matches}
+            for m in alias_matches:
+                key = (m.file, m.line)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged_matches.append(m)
+            discovery = Discovery(symbol=discovery.symbol, matches=merged_matches)
+
     grouped = group_files(discovery)
 
     file_search_id = now_id()
@@ -422,6 +559,7 @@ def select_references(
         if not isinstance(data, dict):
             raise ValueError("retrieval json is not dict")
         data["existing_rvv"] = existing_rvv
+        data["alias_terms"] = alias_terms
         data["_discovery"] = {"symbol": discovery.symbol, "matches": [m.__dict__ for m in discovery.matches[:200]]}
         return FileSearchArtifact(
             file_search_id=file_search_id,
@@ -437,6 +575,7 @@ def select_references(
             raise
         fb = _fallback_selection(discovery)
         fb["existing_rvv"] = existing_rvv
+        fb["alias_terms"] = alias_terms
         fb["_discovery"] = {"symbol": discovery.symbol, "matches": [m.__dict__ for m in discovery.matches[:200]]}
         return FileSearchArtifact(
             file_search_id=file_search_id,
@@ -453,6 +592,7 @@ def select_references(
             raise
         fb = _fallback_selection(discovery)
         fb["existing_rvv"] = existing_rvv
+        fb["alias_terms"] = alias_terms
         fb["_discovery"] = {"symbol": discovery.symbol, "matches": [m.__dict__ for m in discovery.matches[:200]]}
         return FileSearchArtifact(
             file_search_id=file_search_id,

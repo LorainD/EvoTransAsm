@@ -307,6 +307,7 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
 
     # 按组迭代计数：每次进入 DEBUG 视为一次本组尝试。
     task.artifacts.group_iteration_count += 1
+    print(f"[DEBUG] 本 group 迭代次数: {task.artifacts.group_iteration_count}")  # Debug log for iteration count
 
     if task.artifacts.group_iteration_count >= _MAX_GROUP_ITERATIONS:
         print(f"\n[DEBUG] 当前 group 已达最大迭代次数 ({_MAX_GROUP_ITERATIONS})，回到 PLAN 选择下一组")
