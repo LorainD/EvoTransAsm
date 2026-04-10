@@ -61,15 +61,33 @@ def _save_pre_injection(apply_dir: Path, dst: Path) -> None:
         pass
 
 
-def _rollback_previous_apply(task: TaskContext) -> None:
-    """Restore files modified by the most recent apply to their pre-injection state.
+def _rollback_apply_dir(pre_dir: Path, ffmpeg_root: Path) -> int:
+    """Restore files from a single pre_injection dir. Returns count of restored files."""
+    restored = 0
+    for pre_file in pre_dir.rglob("*"):
+        if not pre_file.is_file():
+            continue
+        if pre_file.name.endswith(".__new__"):
+            continue
+        rel = pre_file.relative_to(pre_dir)
+        marker = pre_file.parent / (pre_file.name + ".__new__")
+        dst = ffmpeg_root / rel
+        if marker.exists():
+            if dst.exists():
+                dst.unlink()
+                restored += 1
+        else:
+            original = pre_file.read_text(encoding="utf-8", errors="replace")
+            if dst.exists():
+                write_text(dst, original)
+                restored += 1
+    return restored
 
-    Reads from ``apply_<id>/pre_injection/`` and writes back to ffmpeg_root.
-    Files that didn't exist before injection are deleted.
-    """
+
+def _rollback_previous_apply(task: TaskContext) -> None:
+    """Restore files modified by the most recent apply to their pre-injection state."""
     if not task.artifacts.patch_ids:
         return
-    # Find the most recent apply directory
     try:
         sub = task.artifacts.patch_ids[-1].split("/")[-1]
         prev_patch = task.load_artifact("PATCH", sub_id=sub)
@@ -79,36 +97,37 @@ def _rollback_previous_apply(task: TaskContext) -> None:
     if not patch_id:
         return
 
-    apply_dir = task.run_dir / f"apply_{patch_id}"
-    pre_dir = apply_dir / "pre_injection"
+    pre_dir = task.run_dir / f"apply_{patch_id}" / "pre_injection"
     if not pre_dir.exists():
         return
 
-    restored = 0
-    for pre_file in pre_dir.rglob("*"):
-        if not pre_file.is_file():
-            continue
-        if pre_file.name.endswith(".__new__"):
-            continue
-        # Reconstruct the target path
-        rel = pre_file.relative_to(pre_dir)
-        # Check if this was a newly created file
-        marker = pre_file.parent / (pre_file.name + ".__new__")
-        dst = task.ffmpeg_root / rel
-        if marker.exists():
-            # File didn't exist before — delete it
-            if dst.exists():
-                dst.unlink()
-                restored += 1
-        else:
-            # Restore original content
-            original = pre_file.read_text(encoding="utf-8", errors="replace")
-            if dst.exists():
-                write_text(dst, original)
-                restored += 1
-
+    restored = _rollback_apply_dir(pre_dir, task.ffmpeg_root)
     if restored:
         print(f"[PATCH] 已回滚 {restored} 个文件到注入前状态")
+
+
+def rollback_all_applies(task: TaskContext) -> None:
+    """Restore ALL files modified during this session to their pre-injection state.
+
+    Called on final session failure to ensure ffmpeg workspace remains compilable.
+    Iterates all apply_<id> directories in run_dir, applying each pre_injection
+    snapshot in reverse order so the earliest state is restored last (wins).
+    """
+    # Collect all apply dirs, sorted newest-first so earlier originals win
+    apply_dirs = sorted(
+        task.run_dir.glob("apply_*/pre_injection"),
+        key=lambda p: p.parent.name,
+        reverse=True,
+    )
+    if not apply_dirs:
+        return
+
+    total = 0
+    for pre_dir in apply_dirs:
+        total += _rollback_apply_dir(pre_dir, task.ffmpeg_root)
+
+    if total:
+        print(f"[PATCH] session 失败，已将 ffmpeg 工作区回滚 {total} 个文件到本次侵入前状态")
 
 
 def _inject_asm_file(dst: Path, content: str, apply_dir: Path) -> dict:
@@ -723,39 +742,45 @@ def apply_patch(task: TaskContext, generate_plan: dict) -> PatchArtifact:
             if before != after:
                 diffs.append({"file": target_path, "before_len": len(before), "after_len": len(after)})
 
-    expected_symbols = _extract_expected_symbols(generate_plan)
-    impl_text = ""
-    register_text = ""
-    for item in generate_plan.get("generated", []):
-        target_path = str(item.get("target_path", ""))
-        full = task.ffmpeg_root / target_path
-        if not full.exists():
-            continue
-        try:
-            text = full.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            continue
-        low = target_path.lower()
-        if low.endswith((".s", ".asm")):
-            impl_text += "\n" + text
-        if low.endswith("_init.c") or low.endswith("init.c"):
-            register_text += "\n" + text
-
-    missing_post_checks: list[str] = []
-    for sym in sorted(expected_symbols):
-        if impl_text and not _contains_symbol_like(impl_text, sym):
-            missing_post_checks.append(f"missing_impl_symbol:{sym}")
-        if register_text and not _contains_symbol_like(register_text, sym):
-            missing_post_checks.append(f"missing_register_symbol:{sym}")
-
     write_json(apply_dir / "log.json", logs)
     record_trajectory_action("patch_apply", f"Applied {len(applied_paths)} file(s)")
-    if missing_post_checks:
-        record_trajectory_action("patch_validate", f"post_apply_missing={missing_post_checks}")
+
+    # Only run post-apply symbol checks when files were actually written.
+    # If nothing was applied, the failure is an apply error — not a symbol error.
+    missing_post_checks: list[str] = []
+    if applied_paths:
+        expected_symbols = _extract_expected_symbols(generate_plan)
+        impl_text = ""
+        register_text = ""
+        for item in generate_plan.get("generated", []):
+            target_path = str(item.get("target_path", ""))
+            full = task.ffmpeg_root / target_path
+            if not full.exists():
+                continue
+            try:
+                text = full.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            low = target_path.lower()
+            if low.endswith((".s", ".asm")):
+                impl_text += "\n" + text
+            if low.endswith("_init.c") or low.endswith("init.c"):
+                register_text += "\n" + text
+
+        for sym in sorted(expected_symbols):
+            if impl_text and not _contains_symbol_like(impl_text, sym):
+                missing_post_checks.append(f"missing_impl_symbol:{sym}")
+            if register_text and not _contains_symbol_like(register_text, sym):
+                missing_post_checks.append(f"missing_register_symbol:{sym}")
+
+        if missing_post_checks:
+            record_trajectory_action("patch_validate", f"post_apply_missing={missing_post_checks}")
 
     success = (len(applied_paths) > 0 or not apply_ok) and not missing_post_checks
     error = ""
-    if missing_post_checks:
+    if not applied_paths and apply_ok:
+        error = "apply_failed: no files written"
+    elif missing_post_checks:
         error = "; ".join(missing_post_checks)
 
     return PatchArtifact(

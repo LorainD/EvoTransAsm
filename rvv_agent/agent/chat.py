@@ -586,68 +586,14 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
         print("\nPlan rationale：")
         print(f"  {plan.rationale}")
 
-    if prompt_yes_no("\n是否进入 plan 修改模式？", default=False):
-        plan = refine_plan_interactive(task.cfg, symbol, plan, discovered_functions)
-        plan_steps = plan.steps
-
     if not prompt_yes_no("\n确认按该 plan 继续？", default=True):
-        print("已取消，本轮结束。")
-        task.current_state = TaskState.DONE
-        return task
-
-    record_trajectory_action(
-        "plan", f"Plan confirmed for {symbol}",
-        detail="\n".join(plan_steps), event_type="human_output",
-    )
-
-    artifact = PlanArtifact(
-        plan_id=plan.plan_id,
-        steps=plan_steps,
-        function_order=plan.function_order,
-        groups=plan.groups,
-        acceptance_criteria=plan.acceptance_criteria or {"build_ok": True, "functionally_valid": True},
-        refine_history=plan.refine_history,
-        rationale=plan.rationale,
-        current_group_idx=0,
-        completed_groups=[],
-        failed_groups=[],
-    )
-    aid = task.save_artifact("PLAN", artifact)
-    task.artifacts.plan_id = aid
-    task.task.plan_id = aid
-    task.artifacts.group_iteration_count = 0
-    task.artifacts.active_group_id = ""
-
-    task.current_state = TaskState.ANALYZE
-    return task
-
-
-    for i, s in enumerate(plan_steps, 1):
-        print(f"  {i}. {s}")
-
-    if plan.function_order:
-        print("\n函数迁移顺序：")
-        for i, f in enumerate(plan.function_order, 1):
-            print(f"  {i}. {f}")
-
-    if plan.groups:
-        print("\n函数分组策略：")
-        for group in sorted(plan.groups, key=lambda g: g.order):
-            names = ", ".join(f.name for f in group.functions if f.name)
-            print(f"  - [{group.order}] {group.group_id} ({group.group_type or 'single'}): {names}")
-
-    if plan.rationale:
-        print("\nPlan rationale：")
-        print(f"  {plan.rationale}")
-
-    if prompt_yes_no("\n是否进入 plan 修改模式？", default=False):
-        plan = refine_plan_interactive(task.cfg, symbol, plan, discovered_functions)
-        plan_steps = plan.steps
-
-    if not prompt_yes_no("\n确认按该 plan 继续？", default=True):
-        print("已取消，本轮结束。")
-        task.current_state = TaskState.DONE
-        return task
+        if prompt_yes_no("是否进入 plan 修改模式？", default=False):
+            plan = refine_plan_interactive(task.cfg, symbol, plan, discovered_functions)
+            plan_steps = plan.steps
+        else:
+            print("已取消，本轮结束。")
+            task.current_state = TaskState.DONE
+            return task
 
     record_trajectory_action(
         "plan", f"Plan confirmed for {symbol}",
@@ -670,6 +616,8 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
     aid = task.save_artifact("PLAN", artifact)
     task.artifacts.plan_id = aid
     task.task.plan_id = aid
+    task.artifacts.group_iteration_count = 0
+    task.artifacts.active_group_id = ""
 
     task.current_state = TaskState.ANALYZE
     return task
@@ -1025,6 +973,14 @@ def handle_task_update(task: TaskContext) -> TaskContext:
             build_ok = False
     else:
         build_ok = False
+
+    # On failure, roll back all workspace changes so ffmpeg stays compilable
+    if not build_ok:
+        try:
+            from .patch import rollback_all_applies
+            rollback_all_applies(task)
+        except Exception as e:
+            print(f"[TASK_UPDATE] 回滚失败: {e}")
 
     now_ts = datetime.now().isoformat(timespec="seconds")
     task.task.finished_at = now_ts
