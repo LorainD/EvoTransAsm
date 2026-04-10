@@ -135,7 +135,7 @@ def analyze_with_llm(
         ]
         try:
             raw = chat_completion_with_retry(cfg.llm, messages, max_tokens=1600, stage="analyze", max_retries=3)
-            data = json.loads(raw)
+            data = extract_json_from_llm(raw)
             return AnalysisArtifact(
                 analysis_json=data,
                 symbol=discovery.symbol,
@@ -210,7 +210,7 @@ def analyze_with_llm(
                 stage=f"analyze_{func_name}",
                 max_retries=3,
             )
-            data = json.loads(raw)
+            data = extract_json_from_llm(raw)
             func_analysis = FunctionAnalysis(
                 function_name=func_name,
                 datatype=data.get("datatype", ""),

@@ -13,7 +13,7 @@
 base_url    = "https://chatbox.isrc.ac.cn/api/chat/completions"
 # base_url    = "https://aigc.x-see.cn/v1/chat/completions"
 # model       = "gpt-5.4"
-model       = "Qwen3-Coder-480B-A35B-Instruct"
+model       = "Qwen3.5-397B-A17B"
 api_key_env = "LLM_API_KEY"
 temperature = 1
 
