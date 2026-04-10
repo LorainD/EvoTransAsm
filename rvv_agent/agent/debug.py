@@ -198,8 +198,28 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
     """
     build_ids = task.artifacts.build_run_ids
     if not build_ids:
-        print("[DEBUG] No build artifacts found, skipping to TASK_UPDATE")
-        task.current_state = TaskState.TASK_UPDATE
+        latest_patch_error = ""
+        if task.artifacts.patch_ids:
+            try:
+                latest_patch_id = task.artifacts.patch_ids[-1].split("/")[-1]
+                latest_patch = task.load_artifact("PATCH", sub_id=latest_patch_id)
+                latest_patch_error = str(latest_patch.get("error", ""))
+            except Exception:
+                latest_patch_error = ""
+
+        if latest_patch_error.startswith("generate_validation_failed"):
+            task.artifacts.group_iteration_count += 1
+            print(f"[DEBUG] pre-build generate contract failure, retry PATCH(generate), group_iter={task.artifacts.group_iteration_count}")
+            record_trajectory_action("debug", "No build artifact; route generate_validation_failed back to PATCH")
+            if task.artifacts.group_iteration_count >= _MAX_GROUP_ITERATIONS:
+                print(f"[DEBUG] 当前 group 已达最大迭代次数 ({_MAX_GROUP_ITERATIONS})，回到 PLAN 选择下一组")
+                return _move_to_next_group_or_finish(task)
+            task.rollback_hint = RollbackTarget.GENERATE.value
+            task.current_state = TaskState.PATCH
+            return task
+
+        print("[DEBUG] No build artifacts found and no pre-build recoverable patch error, moving to PLAN")
+        task.current_state = TaskState.PLAN
         return task
 
     latest_build = task.load_artifact("BUILD", sub_id=build_ids[-1])

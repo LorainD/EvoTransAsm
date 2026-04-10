@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from ..core.config import AppConfig
 from ..core.llm import LlmError, LlmMessage, chat_completion_with_retry, record_trajectory_action
 from ..core.prompts import system_prompt
 from ..core.prompts_patch import (
+    debug_classify_prompt,
     patch_design_prompt,
     patch_generate_prompt,
     patch_locate_prompt,
@@ -46,6 +48,9 @@ from ..core.util import extract_json_from_llm, snippet_exists, snapshot_file
 _extract_gen_json = extract_json_from_llm
 _snippet_already_present = snippet_exists
 _snapshot = snapshot_file
+
+# Keep PATCH self-healing bounded when BUILD has not started yet.
+_MAX_PREBUILD_PATCH_RETRIES = 3
 
 
 def _save_pre_injection(apply_dir: Path, dst: Path) -> None:
@@ -222,27 +227,249 @@ def _build_group_scoped_analysis(task: TaskContext) -> dict:
     return {}
 
 
-# ---------------------------------------------------------------------------
-# Step 1: Locate patch points
-# ---------------------------------------------------------------------------
 
-def locate_patch_points(task: TaskContext) -> list[PatchPoint]:
-    """LLM determines precise insertion anchors for the migration."""
+def _build_planning_bundle(task: TaskContext) -> dict:
+    """Build a shared context bundle for locate/design/generate stages."""
     file_search = task.load_artifact("SEARCH_FILE")
     if task.artifacts.reference_code_ids:
         sub = task.artifacts.reference_code_ids[-1].split("/", 1)[-1]
         reference = task.load_artifact("BUILD_REFERENCE", sub_id=sub)
     else:
         reference = task.load_artifact("BUILD_REFERENCE")
+
     analysis_json = _build_group_scoped_analysis(task)
+
+    module = task.target.module
+    riscv_dir = task.ffmpeg_root / "libavcodec" / "riscv"
+    rvv_path = f"libavcodec/riscv/{module}_rvv.S"
+    init_path = f"libavcodec/riscv/{module}_init.c"
+    makefile_path = "libavcodec/riscv/Makefile"
+
+    return {
+        "analysis_json": analysis_json,
+        "selected_files": file_search.get("selected_files", []),
+        "code_context": reference.get("code_context", ""),
+        "existing_rvv": reference.get("existing_rvv", []),
+        "module": module,
+        "symbol": task.target.symbol,
+        "target_files": {
+            "rvv": rvv_path,
+            "init": init_path,
+            "makefile": makefile_path,
+            "rvv_exists": (task.ffmpeg_root / rvv_path).exists(),
+            "init_exists": (task.ffmpeg_root / init_path).exists(),
+            "makefile_exists": (task.ffmpeg_root / makefile_path).exists(),
+            "riscv_dir_exists": riscv_dir.exists(),
+        },
+    }
+
+
+def _design_roles(changes: list[dict]) -> set[str]:
+    """Infer design roles from change type/path.
+
+    Roles: impl/register/build/header.
+    """
+    roles: set[str] = set()
+    for c in changes:
+        ctype = str(c.get("type", "")).lower()
+        path = str(c.get("file", "")).lower()
+        role = str(c.get("role", "")).lower()
+        if role in {"impl", "register", "build", "header"}:
+            roles.add(role)
+        if ctype in {"create_file", "append_function"} or path.endswith((".s", ".asm")):
+            roles.add("impl")
+        if ctype == "inject_init" or path.endswith("_init.c"):
+            roles.add("register")
+        if ctype == "inject_makefile" or path.endswith("makefile"):
+            roles.add("build")
+        if ctype == "inject_header" or path.endswith(".h"):
+            roles.add("header")
+    return roles
+
+
+def _validate_design_contract(task: TaskContext, design: PatchDesign) -> tuple[bool, list[str]]:
+    """Validate design coherence before generation (minimal guardrails)."""
+    issues: list[str] = []
+    changes = design.changes or []
+    roles = _design_roles(changes)
+
+    if "impl" not in roles:
+        issues.append("design_missing_impl")
+    if "register" not in roles:
+        issues.append("design_missing_register")
+
+    has_new_asm = False
+    has_append = False
+    for c in changes:
+        ctype = str(c.get("type", "")).lower()
+        path = str(c.get("file", ""))
+        low = path.lower()
+        if ctype == "create_file" and low.endswith((".s", ".asm")):
+            has_new_asm = True
+        if ctype == "append_function":
+            has_append = True
+            if not (task.ffmpeg_root / path).exists():
+                issues.append(f"append_target_not_found:{path}")
+
+    if has_new_asm and "register" not in roles:
+        issues.append("new_asm_without_register")
+
+    if has_append and not changes:
+        issues.append("append_without_changes")
+
+    return (len(issues) == 0, issues)
+
+
+def _infer_generated_roles(generated: list[dict]) -> set[str]:
+    """Infer generated roles from target path/description/content."""
+    roles: set[str] = set()
+    for item in generated:
+        path = str(item.get("target_path", "")).lower()
+        desc = str(item.get("description", "")).lower()
+        content = str(item.get("content", "")).lower()
+        role = str(item.get("role", "")).lower()
+
+        if role in {"impl", "register", "build", "header"}:
+            roles.add(role)
+
+        if path.endswith((".s", ".asm")):
+            roles.add("impl")
+
+        # Support common FFmpeg registration filenames like *_init_riscv.c.
+        if (
+            path.endswith("_init.c")
+            or path.endswith("_init_riscv.c")
+            or (path.endswith(".c") and "init" in path and "riscv" in path)
+            or "register" in desc
+            or "av_cpu_flag_rvv" in content
+            or ("= ff_" in content and "_rvv" in content)
+        ):
+            roles.add("register")
+
+        if path.endswith("makefile") or "objs-$(" in content:
+            roles.add("build")
+        if path.endswith(".h"):
+            roles.add("header")
+    return roles
+
+
+def _validate_generate_plan(design: PatchDesign, gen_plan: dict) -> tuple[bool, list[str]]:
+    """Validate generated plan with medium strictness.
+
+    Required: impl + register.
+    Build: required only when design explicitly includes build role.
+    """
+    issues: list[str] = []
+    generated = gen_plan.get("generated", []) if isinstance(gen_plan, dict) else []
+    if not generated:
+        return False, ["generated_empty"]
+
+    design_roles = _design_roles(design.changes or [])
+    gen_roles = _infer_generated_roles(generated)
+
+    if "impl" not in gen_roles:
+        issues.append("generated_missing_impl")
+    if "register" not in gen_roles:
+        issues.append("generated_missing_register")
+    if "build" in design_roles and "build" not in gen_roles:
+        issues.append("generated_missing_build")
+
+    return (len(issues) == 0, issues)
+
+
+def _extract_expected_symbols(task: TaskContext, design: PatchDesign | None) -> set[str]:
+    """Extract symbols that should appear after apply."""
+    syms: set[str] = set()
+    target_sym = task.target.symbol.split(".")[-1]
+    if target_sym:
+        syms.add(target_sym)
+
+    if design is not None:
+        for c in design.changes or []:
+            for it in c.get("code_items", []) or []:
+                s = str(it).strip()
+                if s:
+                    syms.add(s.split(".")[-1])
+    return syms
+
+
+def _contains_symbol_like(content: str, symbol: str) -> bool:
+    """Check whether a symbol appears as plain token or prefixed ff_* token."""
+    if not symbol:
+        return False
+    pats = [
+        rf"\b{re.escape(symbol)}\b",
+        rf"\bff_{re.escape(symbol)}(_rvv)?\b",
+    ]
+    return any(re.search(p, content) for p in pats)
+
+
+def _route_apply_failure_with_llm(
+    task: TaskContext,
+    artifact: PatchArtifact,
+    design: PatchDesign | None,
+) -> tuple[TaskState, str]:
+    """Route apply failures via LLM suggestion, with safe fallbacks."""
+    error_text = artifact.error or "patch_apply_failed"
+    current_patch = {
+        "func": task.target.symbol,
+        "design": asdict(design) if design is not None else {},
+        "generate_plan": artifact.generate_plan,
+        "error": artifact.error,
+    }
+
+    if task.cfg is None:
+        return TaskState.DEBUG, "no_cfg_fallback_debug"
+
+    try:
+        messages = [
+            LlmMessage(role="system", content=system_prompt()),
+            LlmMessage(role="user", content=debug_classify_prompt(error_text, current_patch)),
+        ]
+        raw = chat_completion_with_retry(
+            task.cfg.llm,
+            messages,
+            max_tokens=600,
+            stage="patch_apply_route",
+            max_retries=2,
+        ).strip()
+        s_pos = raw.find("{")
+        e_pos = raw.rfind("}")
+        data = json.loads(raw[s_pos:e_pos + 1]) if s_pos != -1 and e_pos > s_pos else json.loads(raw)
+
+        target = str(data.get("rollback_target", "")).strip().lower()
+        suggestion = str(data.get("suggestion", "")).strip()
+        if target in {"locate", "design", "generate"}:
+            task.rollback_hint = target
+            reason = f"llm_route_patch:{target}"
+            if suggestion:
+                reason += f"; suggestion={suggestion[:160]}"
+            return TaskState.PATCH, reason
+
+        reason = "llm_route_debug"
+        if suggestion:
+            reason += f"; suggestion={suggestion[:160]}"
+        return TaskState.DEBUG, reason
+    except Exception as e:
+        return TaskState.DEBUG, f"route_exception_debug:{e}"
+# ---------------------------------------------------------------------------
+# Step 1: Locate patch points
+# ---------------------------------------------------------------------------
+
+def locate_patch_points(task: TaskContext, planning_bundle: dict | None = None) -> list[PatchPoint]:
+    """LLM determines precise insertion anchors for the migration."""
+    bundle = planning_bundle or _build_planning_bundle(task)
+    analysis_json = bundle.get("analysis_json", {})
+    selected_files = bundle.get("selected_files", [])
+    code_context = bundle.get("code_context", "")
 
     messages = [
         LlmMessage(role="system", content=system_prompt()),
         LlmMessage(role="user", content=patch_locate_prompt(
             symbol=task.target.symbol,
             analysis_json=analysis_json,
-            selected_files=file_search.get("selected_files", []),
-            code_context=reference.get("code_context", ""),
+            selected_files=selected_files,
+            code_context=code_context,
         )),
     ]
     try:
@@ -277,9 +504,11 @@ def locate_patch_points(task: TaskContext) -> list[PatchPoint]:
 # ---------------------------------------------------------------------------
 
 def design_patch(task: TaskContext, points: list[PatchPoint],
-                 kb_patterns: list[dict] | None = None) -> PatchDesign:
+                 kb_patterns: list[dict] | None = None,
+                 planning_bundle: dict | None = None) -> PatchDesign:
     """LLM decides what changes to make (without generating code yet)."""
-    analysis_json = _build_group_scoped_analysis(task)
+    bundle = planning_bundle or _build_planning_bundle(task)
+    analysis_json = bundle.get("analysis_json", {})
 
     messages = [
         LlmMessage(role="system", content=system_prompt()),
@@ -297,6 +526,10 @@ def design_patch(task: TaskContext, points: list[PatchPoint],
             changes=data.get("changes", []),
             rationale=data.get("rationale", ""),
         )
+        ok, design_issues = _validate_design_contract(task, design)
+        if not ok:
+            record_trajectory_action("patch_plan", f"Design issues: {design_issues}")
+            print(f"[PATCH] 设计一致性检查告警: {design_issues}")
         record_trajectory_action("patch_design", f"Designed {len(design.changes)} changes")
         return design
     except (LlmError, Exception) as e:
@@ -320,24 +553,23 @@ def design_patch(task: TaskContext, points: list[PatchPoint],
 # ---------------------------------------------------------------------------
 
 def generate_code(task: TaskContext, design: PatchDesign,
-                   kb_errors: list[dict] | None = None) -> dict:
+                   kb_errors: list[dict] | None = None,
+                   planning_bundle: dict | None = None,
+                   validation_feedback: list[str] | None = None) -> dict:
     """LLM generates actual code based on the design. Returns generate_plan dict.
 
     On retry (after DEBUG), includes build errors, debug suggestions, and the
     previous failing code in the prompt so the LLM can produce a targeted fix.
     """
-    analysis_json = _build_group_scoped_analysis(task)
-    file_search = task.load_artifact("SEARCH_FILE")
-    if task.artifacts.reference_code_ids:
-        sub = task.artifacts.reference_code_ids[-1].split("/", 1)[-1]
-        reference = task.load_artifact("BUILD_REFERENCE", sub_id=sub)
-    else:
-        reference = task.load_artifact("BUILD_REFERENCE")
+    bundle = planning_bundle or _build_planning_bundle(task)
+    analysis_json = bundle.get("analysis_json", {})
+    selected_files = bundle.get("selected_files", [])
+    existing_rvv = bundle.get("existing_rvv", [])
 
     # Build existing_files_map for incremental merge
     # Include .S files so LLM can see existing RVV implementations
     existing_map: dict[str, str] = {}
-    for rel in file_search.get("selected_files", []):
+    for rel in selected_files:
         full = task.ffmpeg_root / rel
         if full.exists() and full.is_file():
             try:
@@ -350,7 +582,7 @@ def generate_code(task: TaskContext, design: PatchDesign,
                 pass
 
     # Also include existing RVV files from retrieval
-    for rel in reference.get("existing_rvv", []):
+    for rel in existing_rvv:
         if rel not in existing_map:
             full = task.ffmpeg_root / rel
             if full.exists() and full.is_file():
@@ -401,6 +633,7 @@ def generate_code(task: TaskContext, design: PatchDesign,
             debug_suggestions=debug_suggestions,
             previous_code=previous_code,
             kb_errors=kb_errors,
+            validation_feedback=validation_feedback,
         )),
     ]
     try:
@@ -451,7 +684,7 @@ def generate_code(task: TaskContext, design: PatchDesign,
 # Step 4: Apply patch
 # ---------------------------------------------------------------------------
 
-def apply_patch(task: TaskContext, generate_plan: dict) -> PatchArtifact:
+def apply_patch(task: TaskContext, generate_plan: dict, design: PatchDesign | None = None) -> PatchArtifact:
     """Write generated code to the FFmpeg repo, record diffs and snapshots."""
     apply_ok = True
     if task.cfg and task.cfg.human.apply_ok is not None:
@@ -475,10 +708,16 @@ def apply_patch(task: TaskContext, generate_plan: dict) -> PatchArtifact:
             continue
         if action.lower() in ("delete", "replace", "remove", "overwrite"):
             logs.append({"target_path": target_path, "action": action,
-                         "success": False, "error": f"action '{action}' blocked"})
+                         "success": False, "error": f"action {action} blocked"})
             continue
 
         dst = task.ffmpeg_root / target_path
+
+        # Guardrail: if file already exists, downgrade create to append to avoid duplicate fragments.
+        if action.lower() == "create" and dst.exists():
+            action = "append"
+            item["action"] = "append"
+            record_trajectory_action("patch_apply_guard", f"downgrade create->append for {target_path}")
 
         # Read before for diff
         before = ""
@@ -509,8 +748,40 @@ def apply_patch(task: TaskContext, generate_plan: dict) -> PatchArtifact:
             if before != after:
                 diffs.append({"file": target_path, "before_len": len(before), "after_len": len(after)})
 
+    expected_symbols = _extract_expected_symbols(task, design)
+    impl_text = ""
+    register_text = ""
+    for item in generate_plan.get("generated", []):
+        target_path = str(item.get("target_path", ""))
+        full = task.ffmpeg_root / target_path
+        if not full.exists():
+            continue
+        try:
+            text = full.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        low = target_path.lower()
+        if low.endswith((".s", ".asm")):
+            impl_text += "\n" + text
+        if low.endswith("_init.c") or low.endswith("init.c"):
+            register_text += "\n" + text
+
+    missing_post_checks: list[str] = []
+    for sym in sorted(expected_symbols):
+        if impl_text and not _contains_symbol_like(impl_text, sym):
+            missing_post_checks.append(f"missing_impl_symbol:{sym}")
+        if register_text and not _contains_symbol_like(register_text, sym):
+            missing_post_checks.append(f"missing_register_symbol:{sym}")
+
     write_json(apply_dir / "log.json", logs)
     record_trajectory_action("patch_apply", f"Applied {len(applied_paths)} file(s)")
+    if missing_post_checks:
+        record_trajectory_action("patch_validate", f"post_apply_missing={missing_post_checks}")
+
+    success = (len(applied_paths) > 0 or not apply_ok) and not missing_post_checks
+    error = ""
+    if missing_post_checks:
+        error = "; ".join(missing_post_checks)
 
     return PatchArtifact(
         patch_id=patch_id,
@@ -520,7 +791,8 @@ def apply_patch(task: TaskContext, generate_plan: dict) -> PatchArtifact:
         generate_plan=generate_plan,
         applied_paths=applied_paths,
         diffs=diffs,
-        success=len(applied_paths) > 0 or not apply_ok,
+        success=success,
+        error=error,
     )
 
 
@@ -600,10 +872,13 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
     run_locate = hint in ("", "locate")
     run_design = hint in ("", "locate", "design")
 
+    planning_bundle = _build_planning_bundle(task)
+    record_trajectory_action("patch_plan", "planning_bundle_ready")
+
     # --- Step 1: Locate ---
     if run_locate:
         print("\n[PATCH] Step 1/4: 定位锚点…")
-        points = locate_patch_points(task)
+        points = locate_patch_points(task, planning_bundle=planning_bundle)
         for p in points:
             print(f"  {p.file}:{p.line} — {p.rationale}")
     else:
@@ -614,7 +889,7 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
     # --- Step 2: Design ---
     if run_design:
         print("\n[PATCH] Step 2/4: 设计变更方案…")
-        design = design_patch(task, points, kb_patterns=kb_patterns)
+        design = design_patch(task, points, kb_patterns=kb_patterns, planning_bundle=planning_bundle)
         for c in design.changes:
             print(f"  [{c.get('type')}] {c.get('file')} — {c.get('description', '')[:60]}")
     else:
@@ -640,13 +915,58 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
             pass
 
     print("\n[PATCH] Step 3/4: 生成代码…（可能需要 20-60 秒）")
-    gen_plan = generate_code(task, design, kb_errors=kb_error_dicts)
+    gen_plan = generate_code(task, design, kb_errors=kb_error_dicts, planning_bundle=planning_bundle)
+    ok_generate, generate_issues = _validate_generate_plan(design, gen_plan)
+    record_trajectory_action("patch_validate", f"generate_ok={ok_generate}; issues={generate_issues}")
+    if not ok_generate:
+        print(f"[PATCH] 生成闭环校验失败，自动重试一次: {generate_issues}")
+        gen_plan = generate_code(
+            task,
+            design,
+            kb_errors=kb_error_dicts,
+            planning_bundle=planning_bundle,
+            validation_feedback=generate_issues,
+        )
+        ok_generate, generate_issues = _validate_generate_plan(design, gen_plan)
+        record_trajectory_action("patch_validate", f"retry_generate_ok={ok_generate}; issues={generate_issues}")
+
     for item in gen_plan.get("generated", []):
         print(f"  → {item.get('target_path')} ({item.get('action')})")
 
+    if not ok_generate:
+        print(f"[PATCH] 生成闭环校验仍失败，回到 PATCH(generate): {generate_issues}")
+        artifact = PatchArtifact(
+            patch_id=now_id(),
+            func=task.target.symbol,
+            points=[asdict(p) for p in points],
+            design=asdict(design),
+            generate_plan=gen_plan,
+            applied_paths=[],
+            diffs=[],
+            success=False,
+            error="generate_validation_failed: " + "; ".join(generate_issues),
+        )
+        aid = task.save_artifact("PATCH", artifact, sub_id=task.target.symbol)
+        task.artifacts.patch_ids.append(aid)
+
+        task.artifacts.group_iteration_count += 1
+        record_trajectory_action(
+            "patch_route_decision",
+            f"pre_build_generate_fail -> PATCH(generate), iter={task.artifacts.group_iteration_count}, issues={generate_issues}",
+        )
+
+        if task.artifacts.group_iteration_count >= _MAX_PREBUILD_PATCH_RETRIES:
+            print(f"[PATCH] 当前 group 预构建重试已达上限({_MAX_PREBUILD_PATCH_RETRIES})，回到 PLAN")
+            task.current_state = TaskState.PLAN
+            return task
+
+        task.rollback_hint = "generate"
+        task.current_state = TaskState.PATCH
+        return task
+
     # --- Step 4: Apply ---
     print("\n[PATCH] Step 4/4: 应用到工作区…")
-    artifact = apply_patch(task, gen_plan)
+    artifact = apply_patch(task, gen_plan, design=design)
     artifact.points = [asdict(p) for p in points]
     artifact.design = asdict(design)
 
@@ -657,8 +977,30 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
     if artifact.success:
         for p in artifact.applied_paths:
             print(f"  ✓ {p}")
-    else:
-        print(f"  ✗ apply failed: {artifact.error}")
+        task.artifacts.group_iteration_count = 0
+        record_trajectory_action("patch_route_decision", "patch_apply_success -> BUILD")
+        task.current_state = TaskState.BUILD
+        return task
 
-    task.current_state = TaskState.BUILD
+    print(f"  ✗ apply failed: {artifact.error}")
+    next_state, route_reason = _route_apply_failure_with_llm(task, artifact, design)
+    record_trajectory_action(
+        "patch_route_decision",
+        f"patch_apply_fail -> {next_state.value}, reason={route_reason}, error={artifact.error}",
+    )
+
+    if next_state == TaskState.PATCH:
+        task.artifacts.group_iteration_count += 1
+        if task.artifacts.group_iteration_count >= _MAX_PREBUILD_PATCH_RETRIES:
+            print(f"[PATCH] apply 失败重试已达上限({_MAX_PREBUILD_PATCH_RETRIES})，回到 PLAN")
+            task.current_state = TaskState.PLAN
+            return task
+        task.current_state = TaskState.PATCH
+        return task
+
+    if next_state == TaskState.PLAN:
+        task.current_state = TaskState.PLAN
+        return task
+
+    task.current_state = TaskState.DEBUG
     return task

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .agent.chat import run_chat
 from .core.config import load_config
+from .core.util import ensure_dir, install_print_tee, now_id
 from .agent.plan import fixed_plan
 from .pipeline import run_migrate
 
@@ -118,15 +119,37 @@ def cmd_chat(args: argparse.Namespace) -> int:
     return run_chat(cfg)
 
 
+def _force_utf8_stdio() -> None:
+    """Best-effort UTF-8 stdio setup across Linux/Windows terminals."""
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdio()
     args = build_parser().parse_args(argv)
-    if args.cmd == "plan":
-        return cmd_plan(args)
-    if args.cmd == "migrate":
-        return cmd_migrate(args)
-    if args.cmd == "chat":
-        return cmd_chat(args)
-    return 1
+
+    session_log_dir = Path("runs") / f"{now_id()}_{args.cmd}_session"
+    ensure_dir(session_log_dir)
+    session_log_path = session_log_dir / "session_print.txt"
+    restore_print = install_print_tee(session_log_path)
+
+    try:
+        print(f"[session] print log: {session_log_path}")
+        if args.cmd == "plan":
+            return cmd_plan(args)
+        if args.cmd == "migrate":
+            return cmd_migrate(args)
+        if args.cmd == "chat":
+            return cmd_chat(args)
+        return 1
+    finally:
+        restore_print()
 
 
 if __name__ == "__main__":

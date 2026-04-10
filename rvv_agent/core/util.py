@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import datetime as dt
+import builtins
 import json
 import os
 import re
 import shlex
 import subprocess
+import threading
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 @dataclass(frozen=True)
@@ -191,6 +193,49 @@ def print_llm_error(err: Exception | str, stage: str = "") -> None:
             f"{'='*60}\n"
         )
 
+
+
+def install_print_tee(log_path: Path) -> Callable[[], None]:
+    """Tee all `print(...)` calls to *log_path* until restored.
+
+    Returns a restore callback that must be called to recover original print.
+    """
+    ensure_dir(log_path.parent)
+    # Use UTF-8 with BOM to improve Windows-side auto-detection in editors/tools.
+    log_fp = log_path.open("a", encoding="utf-8-sig", buffering=1)
+    original_print = builtins.print
+    lock = threading.Lock()
+
+    def tee_print(*args: Any, **kwargs: Any) -> None:
+        original_print(*args, **kwargs)
+
+        sep = kwargs.get("sep", " ")
+        end = kwargs.get("end", "\n")
+        try:
+            text = sep.join(str(a) for a in args) + end
+        except Exception:
+            text = "<print serialization error>" + end
+
+        with lock:
+            try:
+                log_fp.write(text)
+                flush_requested = bool(kwargs.get("flush", False))
+                if flush_requested:
+                    log_fp.flush()
+            except Exception:
+                # Logging must not break runtime output.
+                pass
+
+    builtins.print = tee_print
+
+    def restore() -> None:
+        builtins.print = original_print
+        try:
+            log_fp.close()
+        except Exception:
+            pass
+
+    return restore
 
 # ---------------------------------------------------------------------------
 # Smart build-error extractor
