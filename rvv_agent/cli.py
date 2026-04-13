@@ -10,6 +10,7 @@ from .core.config import load_config
 from .core.util import ensure_dir, install_print_tee, now_id, slug
 from .agent.plan import fixed_plan
 from .pipeline import run_migrate
+from .repo_analyze import run_repo_analyze
 
 
 def _resolve_path(p: str | None) -> Path | None:
@@ -69,6 +70,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="FFmpeg root dir (default from config)",
     )
 
+    p_analyze = sub.add_parser(
+        "repo_analyze",
+        aliases=["analyze"],
+        help="Index existing FFmpeg riscv implementations and generate repository knowledge JSON",
+    )
+    p_analyze.add_argument("symbol", nargs="?", default="", help="Target symbol/module (optional when --all-riscv)")
+    p_analyze.add_argument(
+        "--all-riscv",
+        action="store_true",
+        help="Scan all existing riscv implementations under FFmpeg and analyze in batch",
+    )
+    p_analyze.add_argument(
+        "--output",
+        default="repo_analyze.json",
+        help="Output JSON path (default: repo_analyze.json)",
+    )
+
     return parser
 
 
@@ -126,6 +144,35 @@ def cmd_chat(args: argparse.Namespace) -> int:
     return run_chat(cfg)
 
 
+def cmd_analyze(args: argparse.Namespace) -> int:
+    cfg = load_config(_resolve_path(args.config))
+
+    ffmpeg_root = cfg.ffmpeg.root.expanduser().resolve()
+
+    if not ffmpeg_root.exists():
+        print(f"error: ffmpeg_root not found: {ffmpeg_root}", file=sys.stderr)
+        return 2
+
+    symbol = str(args.symbol or "").strip()
+    if not symbol and not args.all_riscv:
+        print("error: repo_analyze requires a symbol or --all-riscv", file=sys.stderr)
+        return 2
+
+    output_path = Path(args.output).expanduser().resolve()
+    result = run_repo_analyze(
+        cfg,
+        ffmpeg_root=ffmpeg_root,
+        symbol=symbol,
+        all_riscv=args.all_riscv,
+        output_path=output_path,
+    )
+
+    print(f"run_dir: {result.run_dir}")
+    print(f"output:  {result.output_path}")
+    print(f"symbols: {result.symbol_count} functions: {result.function_count}")
+    return 0
+
+
 def _force_utf8_stdio() -> None:
     """Best-effort UTF-8 stdio setup across Linux/Windows terminals."""
     try:
@@ -162,6 +209,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_migrate(args, run_dir=run_dir, task_id=task_id)
         if args.cmd == "chat":
             return cmd_chat(args)
+        if args.cmd in {"repo_analyze", "analyze"}:
+            return cmd_analyze(args)
         return 1
     finally:
         restore_print()

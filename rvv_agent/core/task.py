@@ -155,6 +155,7 @@ class FunctionAnalysis:
     c_candidates: list[str] = field(default_factory=list)
     x86_refs: list[str] = field(default_factory=list)
     arm_refs: list[str] = field(default_factory=list)
+    arch_simd_experience: dict[str, list[str]] = field(default_factory=dict)
     notes: str = ""
     kb_pattern_ids: list[str] = field(default_factory=list)
     kb_error_classes: list[str] = field(default_factory=list)

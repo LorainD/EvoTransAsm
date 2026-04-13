@@ -12,6 +12,7 @@ def patch_generate_prompt(
     symbol: str,
     analysis_json: dict,
     target_files: dict,
+    repository_knowledge_entry: dict | None = None,
     existing_files_map: dict[str, str] | None = None,
     build_errors: str | None = None,
     debug_suggestions: list[str] | None = None,
@@ -46,8 +47,11 @@ def patch_generate_prompt(
         if debug_suggestions:
             fix_section += "\n## 诊断建议\n" + "\n".join(f"- {s}" for s in debug_suggestions) + "\n"
         if previous_code:
+            prev_items = previous_code.get("generated", [])
+            if not prev_items and isinstance(previous_code.get("generate_plan"), dict):
+                prev_items = previous_code.get("generate_plan", {}).get("patches", [])
             prev_parts = []
-            for item in previous_code.get("generated", []):
+            for item in prev_items:
                 tp = item.get("target_path", "?")
                 code = item.get("content", "")
                 prev_parts.append(f"### {tp}\n```\n{code[:3000]}\n```")
@@ -63,6 +67,14 @@ def patch_generate_prompt(
             + "\n"
         )
 
+    repo_section = ""
+    if repository_knowledge_entry:
+        repo_section = (
+            "\n## 仓库实现经验（repository_knowledge）\n"
+            + json.dumps(repository_knowledge_entry, ensure_ascii=False, indent=2)[:5000]
+            + "\n"
+        )
+
     return f"""你是 FFmpeg RVV 迁移专家。请生成可直接注入的完整变更单元。
 
 目标算子: {symbol}
@@ -72,36 +84,31 @@ def patch_generate_prompt(
 
 ## 注入目标状态（工具扫描结果，确定性）
 {json.dumps(target_files, ensure_ascii=False, indent=2)}
-{existing_section}{kb_section}{fix_section}{validation_section}
+{repo_section}{existing_section}{kb_section}{fix_section}{validation_section}
 
 ## 合法 action 类型
-- create           : 新建文件（target 不存在时使用）
-- append           : 追加到已有 .S 文件末尾
-- inject_rvv_block : 注入到 init.c 的 #if HAVE_RVV 块内（或新建该块）
-- inject_objs      : 注入到 Makefile 的 OBJS-$() 行后（或追加到末尾）
-- inject_arch_decl : 注入到原始 C 文件的 #if ARCH_RISCV 块内（或新建该块）
+- create  : 新建文件（完整内容）
+- append  : 追加内容到已有文件（若不存在则创建）
+- replace : 覆盖整个目标文件（完整内容）
 
-根据 target_files 中的存在性和块存在性字段选择正确 action，不要使用 inject（已废弃）。
+禁止输出其他 action。
 
 ## 强约束
-1. 产物必须覆盖 impl + register。
-2. 若 target_files 指示 makefile 尚未覆盖 module（makefile_has_module=false），必须输出 build 角色项。
-3. 按文件单位输出，不要只给零散片段。
-4. RVV .S 要遵循 FFmpeg 现有模式（命名、宏、.globl/.type/ret/.size）。
-5. init.c 必须形成声明/注册闭环，避免只声明不注册或只注册未实现。
+1. 按文件单位输出，不要只给零散片段。
+2. RVV .S 要遵循 FFmpeg 现有模式（命名、宏、.globl/.type/ret/.size）。
+3. init.c/Makefile 内容必须与生成实现保持一致，避免声明-实现脱节。
 
 ## 输出 JSON（严格）
 {{
-  "generated": [
-    {{
-      "target_path": "...",
-      "role": "impl|register|build|header|arch_glue",
-      "action": "create|append|inject_rvv_block|inject_objs|inject_arch_decl",
-      "content": "...",
-      "anchor_hint": "...",
-      "description": "..."
+    "generate_plan": {{
+        "patches": [
+            {{
+                "target_path": "...",
+                "action": "create|append|replace",
+                "content": "..."
+            }}
+        ]
     }}
-  ]
 }}"""
 
 

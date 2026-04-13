@@ -133,6 +133,11 @@ def analysis_prompt(
   "c_candidates": ["path:line", ...],
   "x86_refs": ["path:line", ...],   // 优先包含 .S/.asm 实际 SIMD 实现，而非仅 init.c
   "arm_refs": ["path:line", ...],   // 同上，NEON .S 文件比 init_arm.c 更重要
+  "arch_simd_experience": {{
+    "x86": ["从 x86 SIMD 实现中抽取的经验要点", ...],
+    "arm": ["从 ARM/NEON 实现中抽取的经验要点", ...],
+    "aarch64": ["从 AArch64 实现中抽取的经验要点", ...]
+  }},
   "notes": "..."
 }}
 
@@ -212,6 +217,11 @@ def function_analysis_prompt(
   "c_candidates": ["path:line", ...],
   "x86_refs": ["path:line", ...],
   "arm_refs": ["path:line", ...],
+  "arch_simd_experience": {{
+    "x86": ["从 x86 SIMD 实现中抽取的经验要点", ...],
+    "arm": ["从 ARM/NEON 实现中抽取的经验要点", ...],
+    "aarch64": ["从 AArch64 实现中抽取的经验要点", ...]
+  }},
   "notes": "..."
 }}
 

@@ -130,186 +130,6 @@ def rollback_all_applies(task: TaskContext) -> None:
         print(f"[PATCH] session 失败，已将 ffmpeg 工作区回滚 {total} 个文件到本次侵入前状态")
 
 
-def _inject_asm_file(dst: Path, content: str, apply_dir: Path) -> dict:
-    """Inject content into a .S file (create or append)."""
-    rel = str(dst)
-    _save_pre_injection(apply_dir, dst)
-    if not dst.exists():
-        ensure_dir(dst.parent)
-        write_text(dst, content)
-        _snapshot(apply_dir, dst)
-        return {"target_path": rel, "action": "create", "applied_at": "new_file", "success": True}
-    existing = dst.read_text(encoding="utf-8", errors="replace")
-    if _snippet_already_present(existing, content):
-        return {"target_path": rel, "action": "append", "applied_at": "skipped_duplicate", "success": True}
-    merged = existing.rstrip("\n") + "\n\n" + content.lstrip("\n")
-    write_text(dst, merged)
-    _snapshot(apply_dir, dst)
-    return {"target_path": rel, "action": "append", "applied_at": "end", "success": True}
-
-
-def _inject_text_file(dst: Path, content: str, anchor_hint: str,
-                       apply_dir: Path, cfg: AppConfig | None) -> dict:
-    """Inject content into a .c/.h/Makefile (create, or LLM-located insert)."""
-    rel = str(dst)
-    _save_pre_injection(apply_dir, dst)
-    if not dst.exists():
-        ensure_dir(dst.parent)
-        write_text(dst, content)
-        _snapshot(apply_dir, dst)
-        return {"target_path": rel, "action": "create", "applied_at": "new_file", "success": True}
-    existing = dst.read_text(encoding="utf-8", errors="replace")
-    if _snippet_already_present(existing, content):
-        return {"target_path": rel, "action": "append", "applied_at": "skipped_duplicate", "success": True}
-
-    applied_at = "end"
-    new_content = existing.rstrip("\n") + "\n" + content.lstrip("\n")
-    write_text(dst, new_content)
-    _snapshot(apply_dir, dst)
-    return {"target_path": rel, "action": "inject", "applied_at": applied_at, "success": True}
-
-
-def _inject_rvv_block(dst: Path, content: str, apply_dir: Path) -> dict:
-    """Inject content into #if HAVE_RVV block (or create the block)."""
-    rel = str(dst)
-    _save_pre_injection(apply_dir, dst)
-    if not dst.exists():
-        ensure_dir(dst.parent)
-        write_text(dst, content)
-        _snapshot(apply_dir, dst)
-        return {"target_path": rel, "action": "inject_rvv_block", "applied_at": "new_file", "success": True}
-
-    existing = dst.read_text(encoding="utf-8", errors="replace")
-    if _snippet_already_present(existing, content):
-        return {"target_path": rel, "action": "inject_rvv_block", "applied_at": "skipped_duplicate", "success": True}
-
-    lines = existing.splitlines(keepends=True)
-    start = -1
-    end = -1
-    for i, line in enumerate(lines):
-        if re.search(r"#\s*if\s+(HAVE_RVV|CONFIG_RVV)", line):
-            start = i
-            break
-    if start >= 0:
-        for j in range(start + 1, len(lines)):
-            if re.search(r"#\s*endif", lines[j]):
-                end = j
-                break
-
-    inject = content.strip("\n")
-    if not inject.endswith("\n"):
-        inject += "\n"
-
-    if start >= 0 and end > start:
-        lines.insert(end, inject)
-        new_text = "".join(lines)
-        applied_at = f"line:{end-1}"
-    else:
-        block = f"\n#if HAVE_RVV\n{inject}#endif\n"
-        new_text = existing.rstrip("\n") + block
-        applied_at = "append_new_rvv_block"
-
-    write_text(dst, new_text)
-    _snapshot(apply_dir, dst)
-    return {"target_path": rel, "action": "inject_rvv_block", "applied_at": applied_at, "success": True}
-
-
-def _inject_makefile_objs(dst: Path, content: str, apply_dir: Path) -> dict:
-    """Inject object entries to Makefile OBJS block."""
-    rel = str(dst)
-    _save_pre_injection(apply_dir, dst)
-    if not dst.exists():
-        ensure_dir(dst.parent)
-        write_text(dst, content)
-        _snapshot(apply_dir, dst)
-        return {"target_path": rel, "action": "inject_objs", "applied_at": "new_file", "success": True}
-
-    existing = dst.read_text(encoding="utf-8", errors="replace")
-    if _snippet_already_present(existing, content):
-        return {"target_path": rel, "action": "inject_objs", "applied_at": "skipped_duplicate", "success": True}
-
-    lines = existing.splitlines(keepends=True)
-    module = ""
-    m = re.search(r"CONFIG_([A-Z0-9_]+)", content)
-    if m:
-        module = m.group(1)
-
-    target_pat = re.compile(rf"OBJS-\$\(CONFIG_{re.escape(module)}\)") if module else None
-    insert_pos = -1
-    if target_pat is not None:
-        for i, line in enumerate(lines):
-            if target_pat.search(line):
-                insert_pos = i + 1
-                break
-
-    inject = content.strip("\n")
-    if not inject.endswith("\n"):
-        inject += "\n"
-
-    if insert_pos >= 0:
-        lines.insert(insert_pos, inject)
-        new_text = "".join(lines)
-        applied_at = f"line:{insert_pos-1}"
-    else:
-        new_text = existing.rstrip("\n") + "\n" + inject
-        applied_at = "append_end"
-
-    write_text(dst, new_text)
-    _snapshot(apply_dir, dst)
-    return {"target_path": rel, "action": "inject_objs", "applied_at": applied_at, "success": True}
-
-
-def _inject_arch_decl(dst: Path, content: str, apply_dir: Path) -> dict:
-    """Inject content into #if ARCH_RISCV block (or create the block)."""
-    rel = str(dst)
-    _save_pre_injection(apply_dir, dst)
-    if not dst.exists():
-        ensure_dir(dst.parent)
-        write_text(dst, content)
-        _snapshot(apply_dir, dst)
-        return {"target_path": rel, "action": "inject_arch_decl", "applied_at": "new_file", "success": True}
-
-    existing = dst.read_text(encoding="utf-8", errors="replace")
-    if _snippet_already_present(existing, content):
-        return {"target_path": rel, "action": "inject_arch_decl", "applied_at": "skipped_duplicate", "success": True}
-
-    lines = existing.splitlines(keepends=True)
-    start = -1
-    end = -1
-    for i, line in enumerate(lines):
-        if re.search(r"#\s*if\s+ARCH_RISCV", line):
-            start = i
-            break
-    if start >= 0:
-        for j in range(start + 1, len(lines)):
-            if re.search(r"#\s*endif", lines[j]):
-                end = j
-                break
-
-    inject = content.strip("\n")
-    if not inject.endswith("\n"):
-        inject += "\n"
-
-    if start >= 0 and end > start:
-        lines.insert(end, inject)
-        new_text = "".join(lines)
-        applied_at = f"line:{end-1}"
-    else:
-        block = f"\n#if ARCH_RISCV\n{inject}#endif\n"
-        new_text = existing.rstrip("\n") + block
-        applied_at = "append_new_arch_block"
-
-    write_text(dst, new_text)
-    _snapshot(apply_dir, dst)
-    return {"target_path": rel, "action": "inject_arch_decl", "applied_at": applied_at, "success": True}
-
-
-_STRUCTURED_INJECTORS = {
-    "inject_rvv_block": _inject_rvv_block,
-    "inject_objs": _inject_makefile_objs,
-    "inject_arch_decl": _inject_arch_decl,
-}
-
 def _build_group_scoped_analysis(task: TaskContext) -> dict:
     """Get PATCH analysis view scoped to the current group."""
     try:
@@ -406,6 +226,126 @@ def _build_planning_bundle(task: TaskContext) -> dict:
     }
 
 
+def _load_repository_knowledge_entry(task: TaskContext) -> dict | None:
+    """Load optional repository knowledge entry for current symbol/module."""
+    candidates = [
+        Path("repo_analyze.json"),
+        task.run_dir / "repo_analyze.json",
+        Path("repository_knowledge.json"),
+        task.run_dir / "repository_knowledge.json",
+    ]
+    data = None
+    for p in candidates:
+        try:
+            if p.exists():
+                data = json.loads(p.read_text(encoding="utf-8"))
+                break
+        except Exception:
+            continue
+
+    if not isinstance(data, dict):
+        return None
+
+    # Support single-entry schema directly.
+    if "entries" not in data:
+        return data
+
+    entries = data.get("entries", [])
+    if not isinstance(entries, list):
+        return None
+
+    symbol = str(task.target.symbol or "")
+    module = str(task.target.module or "")
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("symbol", "")) == symbol:
+            return entry
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("module", "")) == module:
+            return entry
+    return None
+
+
+def _normalize_generate_plan(raw_plan: dict) -> dict:
+    """Normalize LLM output to an internal `generated` list.
+
+    Supports:
+    - new schema: {"generate_plan": {"patches": [...]}}
+    - old schema: {"generated": [...]} / {"files": [...]}.
+    """
+    if not isinstance(raw_plan, dict):
+        return {"generated": []}
+
+    legacy_action_map = {
+        "inject_rvv_block": "append",
+        "inject_objs": "append",
+        "inject_arch_decl": "append",
+    }
+
+    if isinstance(raw_plan.get("generate_plan"), dict):
+        patches = raw_plan.get("generate_plan", {}).get("patches", [])
+        if isinstance(patches, list):
+            generated = []
+            for p in patches:
+                if not isinstance(p, dict):
+                    continue
+                action = str(p.get("action", "create") or "create").strip().lower()
+                action = legacy_action_map.get(action, action)
+                generated.append(
+                    {
+                        "target_path": str(p.get("target_path", "")),
+                        "action": action,
+                        "content": str(p.get("content", "")),
+                        "anchor_hint": str(p.get("anchor_hint", "")),
+                        "description": str(p.get("description", "")),
+                    }
+                )
+            return {"generate_plan": raw_plan.get("generate_plan", {}), "generated": generated}
+
+    if isinstance(raw_plan.get("generated"), list):
+        generated = []
+        for p in raw_plan.get("generated", []):
+            if not isinstance(p, dict):
+                continue
+            action = str(p.get("action", "create") or "create").strip().lower()
+            action = legacy_action_map.get(action, action)
+            generated.append(
+                {
+                    "target_path": str(p.get("target_path", "")),
+                    "action": action,
+                    "content": str(p.get("content", "")),
+                    "anchor_hint": str(p.get("anchor_hint", "")),
+                    "description": str(p.get("description", "")),
+                }
+            )
+        return {"generated": generated}
+
+    if "files" in raw_plan:
+        return {
+            "generated": [
+                {
+                    "target_path": f.get("path", ""),
+                    "action": "create",
+                    "content": f.get("content", ""),
+                    "anchor_hint": "",
+                    "description": "",
+                }
+                for f in raw_plan.get("files", [])
+                if isinstance(f, dict)
+            ]
+        }
+
+    return {"generated": []}
+
+
+def _generated_items(plan: dict) -> list[dict]:
+    return plan.get("generated", []) if isinstance(plan.get("generated", []), list) else []
+
+
 def _infer_generated_roles(generated: list[dict]) -> set[str]:
     """Infer generated roles from target path/description/content."""
     roles: set[str] = set()
@@ -440,26 +380,38 @@ def _infer_generated_roles(generated: list[dict]) -> set[str]:
 
 
 def _validate_generate_plan(gen_plan: dict, target_files: dict) -> tuple[bool, list[str]]:
-    """Validate generated plan with medium strictness.
-
-    Required: impl + register.
-    Build: required when target_files indicates Makefile is not yet covered.
-    """
+    """Validate generated plan with repository constraint checks."""
     issues: list[str] = []
-    generated = gen_plan.get("generated", []) if isinstance(gen_plan, dict) else []
+    generated = _generated_items(gen_plan)
     if not generated:
-        return False, ["generated_empty"]
+        return False, ["generate_plan contains no patches"]
 
-    gen_roles = _infer_generated_roles(generated)
+    analysis_json = target_files if isinstance(target_files, dict) else {}
+    constraints = analysis_json.get("repository_constraints", {})
+    if not isinstance(constraints, dict):
+        constraints = {}
 
-    if "impl" not in gen_roles:
-        issues.append("generated_missing_impl")
-    if "register" not in gen_roles:
-        issues.append("generated_missing_register")
+    required_includes = [str(x) for x in constraints.get("required_includes", []) if str(x).strip()]
+    required_directives = [str(x) for x in constraints.get("required_directives", []) if str(x).strip()]
 
-    needs_build = not target_files.get("makefile_has_module", True)
-    if needs_build and "build" not in gen_roles:
-        issues.append("generated_missing_build")
+    for patch in generated:
+        path = str(patch.get("target_path", "")).lower()
+        content = str(patch.get("content", ""))
+
+        action = str(patch.get("action", "")).lower().strip()
+        if action and action not in {"create", "append", "replace"}:
+            issues.append(f"unsupported_action:{action}")
+
+        if path.endswith((".s", ".asm")):
+            for req in required_includes:
+                if req not in content:
+                    issues.append(f"Missing required include in ASM: {req}")
+            for req in required_directives:
+                if req not in content:
+                    issues.append(f"Missing required directive in ASM: {req}")
+        elif path.endswith(".c"):
+            if "{" not in content or "}" not in content:
+                issues.append(f"C file appears structurally invalid (missing braces): {path}")
 
     return (len(issues) == 0, issues)
 
@@ -471,7 +423,7 @@ def _extract_expected_symbols(generate_plan: dict) -> set[str]:
     generic group labels (e.g. pred8x8) from high-level symbols.
     """
     syms: set[str] = set()
-    for item in generate_plan.get("generated", []):
+    for item in _generated_items(generate_plan):
         text = str(item.get("content", ""))
         for m in re.findall(r"\bff_[A-Za-z0-9_]+_rvv\b", text):
             syms.add(m)
@@ -557,6 +509,7 @@ def generate_code(task: TaskContext,
     analysis_json = bundle.get("analysis_json", {})
     selected_files = bundle.get("selected_files", [])
     existing_rvv = bundle.get("existing_rvv", [])
+    repository_knowledge_entry = _load_repository_knowledge_entry(task)
 
     # Build existing_files_map for incremental merge
     # Include .S files so LLM can see existing RVV implementations
@@ -620,6 +573,7 @@ def generate_code(task: TaskContext,
             symbol=task.target.symbol,
             analysis_json=analysis_json,
             target_files=bundle.get("target_files", {}),
+            repository_knowledge_entry=repository_knowledge_entry,
             existing_files_map=existing_map or None,
             build_errors=build_errors_text,
             debug_suggestions=debug_suggestions,
@@ -630,24 +584,10 @@ def generate_code(task: TaskContext,
     ]
     try:
         raw = chat_completion_with_retry(task.cfg.llm, messages, max_tokens=2800, stage="patch_generate", max_retries=3)
-        data = _extract_gen_json(raw)
-        # Normalize legacy format
-        if "files" in data and "generated" not in data:
-            data = {
-                "generated": [
-                    {
-                        "target_path": f.get("path", ""),
-                        "action": "create",
-                        "content": f.get("content", ""),
-                        "anchor_hint": "",
-                        "description": "",
-                    }
-                    for f in data.get("files", [])
-                ]
-            }
+        data = _normalize_generate_plan(_extract_gen_json(raw))
         record_trajectory_action(
             "patch_generate",
-            f"Generated {len(data.get('generated', []))} files",
+            f"Generated {len(_generated_items(data))} files",
         )
         return data
     except (LlmError, Exception) as e: #TODO：错误处理应该是重连而不是直接使用placeholder
@@ -655,8 +595,8 @@ def generate_code(task: TaskContext,
         if not prompt_yes_no("PATCH 代码生成失败，是否使用 placeholder 继续？", default=False):
             raise
         print("[patch] 使用 placeholder 继续")
-        return {
-            "generated": [{
+        return _normalize_generate_plan({
+            "generate_plan": {"patches": [{
                 "target_path": f"libavcodec/riscv/{task.target.module}_rvv.S",
                 "action": "create",
                 "content": (
@@ -668,8 +608,8 @@ def generate_code(task: TaskContext,
                 ),
                 "anchor_hint": "",
                 "description": "placeholder",
-            }]
-        }
+            }]}
+        })
 
 
 # ---------------------------------------------------------------------------
@@ -690,23 +630,26 @@ def apply_patch(task: TaskContext, generate_plan: dict) -> PatchArtifact:
     applied_paths: list[str] = []
     diffs: list[dict] = []
 
-    for item in generate_plan.get("generated", []):
+    for item in _generated_items(generate_plan):
         target_path = str(item.get("target_path", "")).strip()
         content = str(item.get("content", ""))
-        anchor_hint = str(item.get("anchor_hint", ""))
-        action = str(item.get("action", "create")).strip()
+        action = str(item.get("action", "create")).strip().lower()
 
         if not target_path or not content:
             continue
-        if action.lower() in ("delete", "replace", "remove", "overwrite"):
+        if action in ("delete", "remove", "overwrite"):
             logs.append({"target_path": target_path, "action": action,
                          "success": False, "error": f"action {action} blocked"})
+            continue
+        if action not in {"create", "append", "replace"}:
+            logs.append({"target_path": target_path, "action": action,
+                         "success": False, "error": f"unsupported action: {action}"})
             continue
 
         dst = task.ffmpeg_root / target_path
 
         # Guardrail: if file already exists, downgrade create to append to avoid duplicate fragments.
-        if action.lower() == "create" and dst.exists():
+        if action == "create" and dst.exists():
             action = "append"
             item["action"] = "append"
             record_trajectory_action("patch_apply_guard", f"downgrade create->append for {target_path}")
@@ -722,12 +665,42 @@ def apply_patch(task: TaskContext, generate_plan: dict) -> PatchArtifact:
         if not apply_ok:
             log = {"target_path": target_path, "action": action,
                    "applied_at": "dry_run", "success": True}
-        elif action in _STRUCTURED_INJECTORS:
-            log = _STRUCTURED_INJECTORS[action](dst, content, apply_dir)
-        elif Path(target_path).suffix == ".S":
-            log = _inject_asm_file(dst, content, apply_dir)
         else:
-            log = _inject_text_file(dst, content, anchor_hint, apply_dir, task.cfg)
+            _save_pre_injection(apply_dir, dst)
+            ensure_dir(dst.parent)
+
+            if action == "replace" or action == "create":
+                write_text(dst, content)
+                applied_at = action
+            else:
+                existing = ""
+                if dst.exists():
+                    try:
+                        existing = dst.read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        existing = ""
+
+                if _snippet_already_present(existing, content):
+                    log = {
+                        "target_path": target_path,
+                        "action": action,
+                        "applied_at": "skipped_duplicate",
+                        "success": True,
+                    }
+                    logs.append(log)
+                    continue
+
+                merged = existing.rstrip("\n") + "\n\n" + content.lstrip("\n") if existing else content
+                write_text(dst, merged)
+                applied_at = "append"
+
+            _snapshot(apply_dir, dst)
+            log = {
+                "target_path": target_path,
+                "action": action,
+                "applied_at": applied_at,
+                "success": True,
+            }
 
         logs.append(log)
         if log.get("success") and log.get("applied_at") not in ("dry_run", "skipped_duplicate"):
@@ -752,7 +725,7 @@ def apply_patch(task: TaskContext, generate_plan: dict) -> PatchArtifact:
         expected_symbols = _extract_expected_symbols(generate_plan)
         impl_text = ""
         register_text = ""
-        for item in generate_plan.get("generated", []):
+        for item in _generated_items(generate_plan):
             target_path = str(item.get("target_path", ""))
             full = task.ffmpeg_root / target_path
             if not full.exists():
@@ -841,7 +814,7 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
 
     print("\n[PATCH] Step 1/2: 生成代码…（可能需要 20-60 秒）")
     gen_plan = generate_code(task, kb_errors=kb_error_dicts, planning_bundle=planning_bundle)
-    ok_generate, generate_issues = _validate_generate_plan(gen_plan, planning_bundle.get("target_files", {}))
+    ok_generate, generate_issues = _validate_generate_plan(gen_plan, planning_bundle.get("analysis_json", {}))
     record_trajectory_action("patch_validate", f"generate_ok={ok_generate}; issues={generate_issues}")
     if not ok_generate:
         print(f"[PATCH] 生成闭环校验失败，自动重试一次: {generate_issues}")
@@ -851,10 +824,10 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
             planning_bundle=planning_bundle,
             validation_feedback=generate_issues,
         )
-        ok_generate, generate_issues = _validate_generate_plan(gen_plan, planning_bundle.get("target_files", {}))
+        ok_generate, generate_issues = _validate_generate_plan(gen_plan, planning_bundle.get("analysis_json", {}))
         record_trajectory_action("patch_validate", f"retry_generate_ok={ok_generate}; issues={generate_issues}")
 
-    for item in gen_plan.get("generated", []):
+    for item in _generated_items(gen_plan):
         print(f"  → {item.get('target_path')} ({item.get('action')})")
 
     if not ok_generate:

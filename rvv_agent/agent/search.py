@@ -417,6 +417,103 @@ def _scan_existing_rvv(ffmpeg_root: Path, module: str) -> list[str]:
     return found
 
 
+def scan_riscv_implementation_index(ffmpeg_root: Path) -> dict[str, list[str]]:
+    """Return module -> existing riscv implementation files index.
+
+    This is a repository-level helper used by analyze/indexing modes.
+    """
+    index: dict[str, list[str]] = {}
+    for lib_dir in sorted(ffmpeg_root.glob("lib*/riscv")):
+        if not lib_dir.is_dir():
+            continue
+        for f in sorted(lib_dir.iterdir()):
+            if not f.is_file():
+                continue
+            name = f.name
+            module = ""
+            if name.endswith("_rvv.S"):
+                module = name[: -len("_rvv.S")]
+            elif name.endswith("_init.c"):
+                module = name[: -len("_init.c")]
+            if not module:
+                continue
+            rel = str(f.relative_to(ffmpeg_root)).replace("\\", "/")
+            index.setdefault(module, []).append(rel)
+    return index
+
+
+def enrich_repo_analyze_note_if_needed(
+    cfg: AppConfig,
+    ffmpeg_root: Path,
+    payload: dict,
+) -> dict:
+    """Fill payload.note from one riscv sample when repo_analyze json is empty-ish.
+
+    Trigger when `entries` is empty or top-level `note` is missing.
+    """
+    if not isinstance(payload, dict):
+        return payload
+
+    entries = payload.get("entries", [])
+    has_entries = isinstance(entries, list) and len(entries) > 0
+    has_note = bool(str(payload.get("note", "")).strip())
+    if has_entries and has_note:
+        return payload
+
+    idx = scan_riscv_implementation_index(ffmpeg_root)
+    sample_rel = ""
+    for _, files in idx.items():
+        if files:
+            sample_rel = files[0]
+            break
+
+    if not sample_rel:
+        payload["note"] = payload.get("note") or "No riscv implementation file found for repository experience extraction."
+        return payload
+
+    sample_path = ffmpeg_root / sample_rel
+    try:
+        sample_text = sample_path.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        payload["note"] = payload.get("note") or f"Failed to read riscv sample file: {e}"
+        return payload
+
+    prompt = f"""请阅读下面的 FFmpeg RISC-V 实现片段，提炼可复用的实现经验。
+
+重点：
+1) 代码格式规范（例如 include/指令/宏/函数边界）
+2) 依赖关系格式（例如 init/Makefile/符号命名耦合）
+
+样例文件：{sample_rel}
+代码片段：
+```c
+{sample_text[:5000]}
+```
+
+严格输出 JSON：
+{{
+  "note": "一段简洁中文总结，便于后续 patch prompt 直接引用"
+}}"""
+
+    try:
+        messages = [
+            LlmMessage(role="system", content=system_prompt()),
+            LlmMessage(role="user", content=prompt),
+        ]
+        raw = chat_completion_with_retry(cfg.llm, messages, max_tokens=600, stage="repo_analyze_note", max_retries=2)
+        data = _extract_retrieval_json(raw)
+        note = str(data.get("note", "")).strip() if isinstance(data, dict) else ""
+        if note:
+            payload["note"] = note
+        elif not has_note:
+            payload["note"] = "RISC-V sample parsed but note generation returned empty content."
+    except Exception as e:
+        if not has_note:
+            payload["note"] = f"RISC-V experience extraction fallback due to LLM error: {e}"
+
+    return payload
+
+
 def _extract_alias_terms_with_llm(
     cfg: AppConfig,
     symbol: str,

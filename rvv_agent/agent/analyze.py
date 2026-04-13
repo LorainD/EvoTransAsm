@@ -22,6 +22,58 @@ from ..tool.interactive import prompt_yes_no
 # AnalysisResult = AnalysisArtifact
 
 
+def collect_arch_simd_experience(per_function_analysis: dict[str, FunctionAnalysis]) -> dict[str, list[str]]:
+    """Aggregate x86/arm/aarch64 SIMD经验，供 analyze JSON 复用。"""
+    out: dict[str, list[str]] = {"x86": [], "arm": [], "aarch64": []}
+    seen: dict[str, set[str]] = {"x86": set(), "arm": set(), "aarch64": set()}
+
+    for _, fa in per_function_analysis.items():
+        exp = fa.arch_simd_experience if isinstance(fa.arch_simd_experience, dict) else {}
+        for arch in ("x86", "arm", "aarch64"):
+            for item in exp.get(arch, []) if isinstance(exp.get(arch), list) else []:
+                s = str(item).strip()
+                if not s or s in seen[arch]:
+                    continue
+                seen[arch].add(s)
+                out[arch].append(s)
+
+        for ref in fa.x86_refs:
+            s = f"x86_ref:{ref}"
+            if s not in seen["x86"]:
+                seen["x86"].add(s)
+                out["x86"].append(s)
+        for ref in fa.arm_refs:
+            r = str(ref)
+            target_arch = "aarch64" if "/aarch64/" in r.replace('\\\\', '/') else "arm"
+            s = f"{target_arch}_ref:{r}"
+            if s not in seen[target_arch]:
+                seen[target_arch].add(s)
+                out[target_arch].append(s)
+
+    return out
+
+
+def collect_riscv_simd_experience(
+    existing_rvv_files: list[str],
+    per_function_analysis: dict[str, FunctionAnalysis],
+) -> dict[str, object]:
+    """Aggregate riscv SIMD经验，供 repo_analyze JSON 复用。"""
+    patterns: list[str] = []
+    seen_patterns: set[str] = set()
+    for _, fa in per_function_analysis.items():
+        for p in fa.pattern:
+            s = str(p).strip()
+            if not s or s in seen_patterns:
+                continue
+            seen_patterns.add(s)
+            patterns.append(s)
+
+    return {
+        "existing_rvv_files": [str(x) for x in existing_rvv_files],
+        "inferred_patterns": patterns,
+    }
+
+
 def _sanitize_discovered_functions(data: dict) -> list[dict]:
     """Keep only DiscoveredFunction fields from LLM payload."""
     if not isinstance(data, dict):
@@ -93,6 +145,11 @@ def _fallback_analysis(discovery: Discovery) -> dict:
         "c_candidates": [f"{m.file}:{m.line}" for m in discovery.matches if m.file.endswith(".c")][:20],
         "x86_refs": g["x86_refs"],
         "arm_refs": g["arm_refs"],
+        "arch_simd_experience": {
+            "x86": [f"x86_ref:{x}" for x in g["x86_refs"][:5]],
+            "arm": [f"arm_ref:{x}" for x in g["arm_refs"][:5]],
+            "aarch64": [f"aarch64_ref:{x}" for x in g["aarch64_refs"][:5]],
+        },
         "notes": "LLM 未运行或解析失败，使用 fallback。",
     }
 
@@ -224,6 +281,7 @@ def analyze_with_llm(
                 c_candidates=data.get("c_candidates", []),
                 x86_refs=data.get("x86_refs", []),
                 arm_refs=data.get("arm_refs", []),
+                arch_simd_experience=data.get("arch_simd_experience", {}) if isinstance(data.get("arch_simd_experience", {}), dict) else {},
                 notes=data.get("notes", ""),
                 kb_pattern_ids=kb_pattern_ids,
                 kb_error_classes=kb_error_classes,
@@ -240,6 +298,7 @@ def analyze_with_llm(
                 function_name=func_name,
                 datatype="unknown",
                 vectorizable=False,
+                arch_simd_experience={},
                 kb_pattern_ids=kb_pattern_ids,
                 kb_error_classes=kb_error_classes,
                 notes=f"分析失败: {str(e)[:100]}",

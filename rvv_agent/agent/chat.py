@@ -264,7 +264,7 @@ def _decide_function_migration(func, fa) -> tuple[int, str]:
 
 def handle_analyze(task: TaskContext) -> TaskContext:
     """ANALYZE handler: per-function semantic analysis for current group."""
-    from .analyze import analyze_with_llm
+    from .analyze import analyze_with_llm, collect_arch_simd_experience
     from .context_builder import ContextBuilder, ContextConfig
     from .search import Discovery
 
@@ -388,6 +388,7 @@ def handle_analyze(task: TaskContext) -> TaskContext:
         "skipped_functions": skipped_reasons,
     }
     aggregated_groups[current_group.group_id] = group_view
+    arch_simd_experience = collect_arch_simd_experience(merged.per_function_analysis)
 
     # Keep top-level fields for backward compatibility while preserving full aggregation.
     merged.analysis_json = {
@@ -400,6 +401,7 @@ def handle_analyze(task: TaskContext) -> TaskContext:
         "all_group_functions": group_view["all_group_functions"],
         "migratable_functions": migratable,
         "skipped_functions": skipped_reasons,
+        "arch_simd_experience": arch_simd_experience,
     }
     merged.raw_text = "\n\n".join(raw_parts)
 
