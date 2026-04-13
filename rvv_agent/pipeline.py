@@ -267,6 +267,44 @@ def _derive_exec_result(task: TaskContext) -> tuple[bool, str]:
     return exec_failed, exec_summary
 
 
+def _quick_build_health_check(task: TaskContext) -> tuple[bool, str]:
+    """Best-effort quick build check after rollback."""
+    ffmpeg_root = task.ffmpeg_root
+    build_dir = ffmpeg_root / task.cfg.ffmpeg.build_dir
+    ensure_dir(build_dir)
+
+    # Keep this check lightweight but still meaningful.
+    jobs = max(1, min(task.jobs if task.jobs > 0 else max(1, os.cpu_count() or 1), 2))
+
+    cfg_result = run_configure(task.cfg, ffmpeg_root, build_dir)
+    if cfg_result.returncode != 0:
+        return False, f"rollback_health: configure_rc={cfg_result.returncode}"
+
+    make_result = run_make_checkasm(task.cfg, build_dir, jobs)
+    ok = make_result.returncode == 0
+    return ok, f"rollback_health: configure_rc=0 checkasm_build_rc={make_result.returncode}"
+
+
+def _rollback_on_failure(task: TaskContext, reason: str) -> None:
+    """Rollback all apply snapshots and run a quick health check."""
+    if not task.artifacts.patch_ids:
+        return
+
+    from .agent.patch import rollback_all_applies
+
+    print(f"[pipeline] 失败兜底回滚触发: {reason}")
+    rollback_all_applies(task)
+
+    try:
+        ok, summary = _quick_build_health_check(task)
+        if ok:
+            print(f"[pipeline] 回滚后健康检查通过: {summary}")
+        else:
+            print(f"[pipeline][WARN] 回滚后健康检查失败: {summary}")
+    except Exception as e:
+        print(f"[pipeline][WARN] 回滚后健康检查异常: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -279,6 +317,8 @@ def run_migrate(
     do_exec: bool,
     jobs: int,
     apply: bool,
+    run_dir: Path | None = None,
+    task_id: str | None = None,
 ) -> MigrateResult:
     """Non-interactive migration pipeline (state-machine driven).
 
@@ -296,13 +336,14 @@ def run_migrate(
     target = MigrationTarget(module=module, symbol=symbol)
 
     # 3. Create TaskContext
-    task_id = now_id()
-    run_dir = Path("runs") / f"{task_id}_{slug(symbol)}"
+    resolved_task_id = task_id or now_id()
+    if run_dir is None:
+        run_dir = Path("runs") / f"{resolved_task_id}_{slug(symbol)}"
     ensure_dir(run_dir)
 
     task = TaskContext(
         task=MigrationTask(
-            task_id=task_id,
+            task_id=resolved_task_id,
             target=target,
             status=TaskStatus.RUNNING,
         ),
@@ -337,7 +378,23 @@ def run_migrate(
 
     # 7. Run state machine
     sm = StateMachine(task, handlers)
-    task = sm.run()
+    rollback_done = False
+
+    def _guarded_rollback(reason: str) -> None:
+        nonlocal rollback_done
+        if rollback_done:
+            return
+        _rollback_on_failure(task, reason)
+        rollback_done = True
+
+    try:
+        task = sm.run()
+    except KeyboardInterrupt:
+        _guarded_rollback("keyboard_interrupt")
+        raise
+    except Exception:
+        _guarded_rollback("state_machine_exception")
+        raise
 
     # 8. Generate report
     report_path = write_chat_report(task)
@@ -349,6 +406,9 @@ def run_migrate(
 
     # 10. Derive result
     exec_failed, exec_summary = _derive_exec_result(task)
+
+    if task.task.status != TaskStatus.SUCCEEDED:
+        _guarded_rollback("final_status_failed")
 
     return MigrateResult(
         run_dir=run_dir,

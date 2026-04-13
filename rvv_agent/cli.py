@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import sys
 from pathlib import Path
 
 from .agent.chat import run_chat
 from .core.config import load_config
-from .core.util import ensure_dir, install_print_tee, now_id
+from .core.util import ensure_dir, install_print_tee, now_id, slug
 from .agent.plan import fixed_plan
 from .pipeline import run_migrate
 
@@ -80,7 +79,12 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_migrate(args: argparse.Namespace, session_log: Path) -> int:
+def cmd_migrate(
+    args: argparse.Namespace,
+    *,
+    run_dir: Path | None = None,
+    task_id: str | None = None,
+) -> int:
     cfg = load_config(_resolve_path(args.config))
 
     ffmpeg_root = Path(args.ffmpeg_root) if args.ffmpeg_root else cfg.ffmpeg.root
@@ -101,10 +105,9 @@ def cmd_migrate(args: argparse.Namespace, session_log: Path) -> int:
         do_exec=args.exec,
         jobs=jobs,
         apply=args.apply,
+        run_dir=run_dir,
+        task_id=task_id,
     )
-
-    # Move session_print.txt into the actual run_dir so all artifacts are together
-    _move_session_log(session_log, result.run_dir)
 
     print(f"run_dir: {result.run_dir}")
     print(f"report:  {result.report_path}")
@@ -123,21 +126,6 @@ def cmd_chat(args: argparse.Namespace) -> int:
     return run_chat(cfg)
 
 
-def _move_session_log(src: Path, run_dir: Path) -> None:
-    """Move session_print.txt from temp location into run_dir."""
-    try:
-        if src.exists() and run_dir.exists():
-            dst = run_dir / "session_print.txt"
-            shutil.move(str(src), str(dst))
-            # Remove the now-empty temp dir if possible
-            try:
-                src.parent.rmdir()
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-
 def _force_utf8_stdio() -> None:
     """Best-effort UTF-8 stdio setup across Linux/Windows terminals."""
     try:
@@ -153,10 +141,17 @@ def main(argv: list[str] | None = None) -> int:
     _force_utf8_stdio()
     args = build_parser().parse_args(argv)
 
-    # Write session log to a temp location first; migrate will move it into run_dir
-    session_log_dir = Path("runs") / f"{now_id()}_{args.cmd}_session"
-    ensure_dir(session_log_dir)
-    session_log_path = session_log_dir / "session_print.txt"
+    run_dir: Path | None = None
+    task_id: str | None = None
+    if args.cmd == "migrate":
+        task_id = now_id()
+        run_dir = Path("runs") / f"{task_id}_{slug(args.symbol)}"
+        ensure_dir(run_dir)
+        session_log_path = run_dir / "session_print.txt"
+    else:
+        ensure_dir(Path("runs"))
+        session_log_path = Path("runs") / f"{now_id()}_{args.cmd}_session_print.txt"
+
     restore_print = install_print_tee(session_log_path)
 
     try:
@@ -164,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "plan":
             return cmd_plan(args)
         if args.cmd == "migrate":
-            return cmd_migrate(args, session_log_path)
+            return cmd_migrate(args, run_dir=run_dir, task_id=task_id)
         if args.cmd == "chat":
             return cmd_chat(args)
         return 1
