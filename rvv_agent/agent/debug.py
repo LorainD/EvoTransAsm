@@ -111,9 +111,16 @@ def _llm_classify(
             f"{json.dumps(debug_context, ensure_ascii=False, indent=2)[:2500]}"
         )
 
+    from .context_builder import DebugContext
+
+    debug_ctx = DebugContext(
+        error_text=enriched_error_text,
+        current_patch=current_patch,
+    )
+
     messages = [
         LlmMessage(role="system", content=system_prompt()),
-        LlmMessage(role="user", content=debug_classify_prompt(enriched_error_text, current_patch)),
+        LlmMessage(role="user", content=debug_classify_prompt(debug_ctx)),
     ]
     try:
         raw = chat_completion_with_retry(

@@ -2,16 +2,23 @@
 
 Separated from core/prompts.py to keep the original prompts untouched
 (pipeline mode still uses them).
+
+Now uses dataclass-based context (PatchContext, DebugContext) for cleaner API.
+Backward-compatible wrappers provided for legacy callers.
 """
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..agent.context_builder import PatchContext, DebugContext
 
 
 def patch_generate_prompt(
-    symbol: str,
-    analysis_json: dict,
-    target_files: dict,
+    context: PatchContext | str,
+    analysis_json: dict | None = None,
+    target_files: dict | None = None,
     repository_knowledge_entry: dict | None = None,
     existing_files_map: dict[str, str] | None = None,
     build_errors: str | None = None,
@@ -22,9 +29,55 @@ def patch_generate_prompt(
 ) -> str:
     """Prompt for PATCH generation.
 
+    Accepts either:
+    - New API: PatchContext dataclass (recommended)
+    - Legacy API: individual parameters (for backward compatibility)
+
     This prompt is contract-driven and asks the model to output ready-to-apply
     file-role units with structured action types.
     """
+    # Handle both new dataclass API and legacy parameter API
+    if isinstance(context, str):
+        # Legacy API: context is actually symbol
+        symbol = context
+        ctx_dict = {
+            "symbol": symbol,
+            "analysis_json": analysis_json or {},
+            "target_files": target_files or {},
+            "repository_knowledge_entry": repository_knowledge_entry,
+            "existing_files_map": existing_files_map,
+            "build_errors": build_errors,
+            "debug_suggestions": debug_suggestions,
+            "previous_code": previous_code,
+            "kb_errors": kb_errors,
+            "validation_feedback": validation_feedback,
+        }
+    else:
+        # New API: context is PatchContext dataclass
+        ctx_dict = {
+            "symbol": context.symbol,
+            "analysis_json": context.analysis_json,
+            "target_files": context.target_files,
+            "repository_knowledge_entry": context.repository_knowledge_entry,
+            "existing_files_map": context.existing_files_map,
+            "build_errors": context.build_errors,
+            "debug_suggestions": context.debug_suggestions,
+            "previous_code": context.previous_code,
+            "kb_errors": context.kb_errors,
+            "validation_feedback": context.validation_feedback,
+        }
+
+    symbol = ctx_dict["symbol"]
+    analysis_json = ctx_dict["analysis_json"]
+    target_files = ctx_dict["target_files"]
+    repository_knowledge_entry = ctx_dict["repository_knowledge_entry"]
+    existing_files_map = ctx_dict["existing_files_map"]
+    build_errors = ctx_dict["build_errors"]
+    debug_suggestions = ctx_dict["debug_suggestions"]
+    previous_code = ctx_dict["previous_code"]
+    kb_errors = ctx_dict["kb_errors"]
+    validation_feedback = ctx_dict["validation_feedback"]
+
     existing_section = ""
     if existing_files_map:
         parts = []
@@ -57,7 +110,7 @@ def patch_generate_prompt(
                 prev_parts.append(f"### {tp}\n```\n{code[:3000]}\n```")
             if prev_parts:
                 fix_section += "\n## 上次生成的代码（有错误，需要修正）\n" + "\n".join(prev_parts) + "\n"
-        fix_section += "\n请根据以上错误信息修正代码，而不是从头重新生成。\n"
+        fix_section += "\n请根据以上错误信息修正代码，而��是从头重新生成。\n"
 
     validation_section = ""
     if validation_feedback:
@@ -112,8 +165,25 @@ def patch_generate_prompt(
 }}"""
 
 
-def debug_classify_prompt(error_text: str, current_patch: dict | None = None) -> str:
-    """Prompt for DEBUG stage: classify error and suggest rollback target."""
+def debug_classify_prompt(
+    context: DebugContext | str,
+    current_patch: dict | None = None,
+) -> str:
+    """Prompt for DEBUG stage: classify error and suggest rollback target.
+
+    Accepts either:
+    - New API: DebugContext dataclass (recommended)
+    - Legacy API: error_text string + current_patch dict (for backward compatibility)
+    """
+    # Handle both new dataclass API and legacy parameter API
+    if isinstance(context, str):
+        # Legacy API: context is actually error_text
+        error_text = context
+    else:
+        # New API: context is DebugContext dataclass
+        error_text = context.error_text
+        current_patch = context.current_patch
+
     patch_section = ""
     if current_patch:
         patch_section = f"\n## 当前 Patch 信息\n{json.dumps(current_patch, ensure_ascii=False, indent=2)[:3000]}"

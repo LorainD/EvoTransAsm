@@ -1,7 +1,8 @@
 """agent.context_builder - Centralized context construction for LLM stages."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 
 from ..core.task import TaskContext
 from ..memory.knowledge_base import KnowledgeBase
@@ -16,6 +17,30 @@ class ContextConfig:
     include_kb: bool = True
     include_errors: bool = True
     include_prior_analysis: bool = True
+
+
+@dataclass
+class PatchContext:
+    """Context for PATCH stage prompt generation."""
+    symbol: str
+    analysis_json: dict
+    target_files: dict
+    repository_knowledge_entry: dict | None = None
+    existing_files_map: dict[str, str] | None = None
+    build_errors: str | None = None
+    debug_suggestions: list[str] | None = None
+    previous_code: dict | None = None
+    kb_errors: list[dict] | None = None
+    validation_feedback: list[str] | None = None
+
+
+@dataclass
+class DebugContext:
+    """Context for DEBUG stage prompt generation."""
+    error_text: str
+    current_patch: dict | None = None
+    error_history: list[str] = field(default_factory=list)
+    known_fixes: list[dict] = field(default_factory=list)
 
 
 class ContextBuilder:
@@ -147,7 +172,117 @@ class ContextBuilder:
 
         return ctx
 
+    def build_patch_context(
+        self,
+        symbol: str,
+        analysis_json: dict,
+        target_files: dict,
+        config: ContextConfig | None = None,
+    ) -> PatchContext:
+        """Build complete PATCH stage context from task artifacts.
+
+        Collects analysis, errors, KB patterns, and prior code into a single dataclass.
+        """
+        config = config or ContextConfig()
+
+        # Collect build errors
+        build_errors = None
+        if config.include_errors and self.task.all_build_errors:
+            build_errors = "\n".join(self.task.all_build_errors[-3:])
+
+        # Collect KB errors
+        kb_errors = None
+        if config.include_kb and self.kb:
+            from .debug import classify_error
+
+            if build_errors:
+                error_class = classify_error(build_errors)
+                kb_matches = self.kb.search_errors(error_class=error_class.value, max_results=config.max_kb_patterns)
+                kb_errors = [
+                    {
+                        "error_class": error_class.value,
+                        "pattern": f.pattern[:100],
+                        "fix_strategy": f.fix_strategy,
+                    }
+                    for f in kb_matches
+                ]
+
+        # Collect prior patch if exists
+        previous_code = None
+        try:
+            patch = self.task.load_artifact("PATCH")
+            if isinstance(patch, dict):
+                previous_code = patch
+        except Exception:
+            pass
+
+        # Collect repository knowledge
+        repository_knowledge_entry = None
+        try:
+            repo_analyze = self.task.load_artifact("REPO_ANALYZE")
+            if isinstance(repo_analyze, dict):
+                repository_knowledge_entry = repo_analyze
+        except Exception:
+            pass
+
+        return PatchContext(
+            symbol=symbol,
+            analysis_json=analysis_json,
+            target_files=target_files,
+            repository_knowledge_entry=repository_knowledge_entry,
+            build_errors=build_errors,
+            kb_errors=kb_errors,
+            previous_code=previous_code,
+        )
+
+    def build_debug_context_full(
+        self,
+        error_text: str,
+        current_patch: dict | None = None,
+        config: ContextConfig | None = None,
+    ) -> DebugContext:
+        """Build complete DEBUG stage context as dataclass.
+
+        Collects error history and known fixes from KB.
+        """
+        config = config or ContextConfig()
+
+        # Collect error history
+        error_history = []
+        if self.task.all_build_errors:
+            error_history = self.task.all_build_errors[-5:]
+
+        # Collect known fixes from KB
+        known_fixes = []
+        if config.include_kb and self.kb:
+            from .debug import classify_error
+
+            error_class = classify_error(error_text)
+            kb_matches = self.kb.search_errors(error_class=error_class.value, max_results=3)
+            known_fixes = [
+                {
+                    "pattern": f.pattern[:100],
+                    "fix_strategy": f.fix_strategy,
+                }
+                for f in kb_matches
+            ]
+
+        return DebugContext(
+            error_text=error_text,
+            current_patch=current_patch,
+            error_history=error_history,
+            known_fixes=known_fixes,
+        )
+
     @staticmethod
     def _format_code(code: str, max_lines: int) -> str:
         lines = code.splitlines()[:max_lines]
         return "\n".join(f"{i + 1:4d}: {line}" for i, line in enumerate(lines))
+
+    @staticmethod
+    def _format_section(title: str, content: str, max_chars: int = 5000) -> str:
+        """Format a context section with title and truncation marker."""
+        truncated = content[:max_chars]
+        if len(content) > max_chars:
+            truncated += f"\n... (截断，原长 {len(content)} 字符)"
+        return f"\n## {title}\n{truncated}\n"

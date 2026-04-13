@@ -461,9 +461,17 @@ def _route_apply_failure_with_llm(
         return TaskState.DEBUG, "no_cfg_fallback_debug"
 
     try:
+        from .context_builder import ContextBuilder, DebugContext
+
+        ctx_builder = ContextBuilder(task, kb=None)
+        debug_ctx = DebugContext(
+            error_text=error_text,
+            current_patch=current_patch,
+        )
+
         messages = [
             LlmMessage(role="system", content=system_prompt()),
-            LlmMessage(role="user", content=debug_classify_prompt(error_text, current_patch)),
+            LlmMessage(role="user", content=debug_classify_prompt(debug_ctx)),
         ]
         raw = chat_completion_with_retry(
             task.cfg.llm,
@@ -567,20 +575,26 @@ def generate_code(task: TaskContext,
         except Exception:
             pass
 
+    # Build PATCH context using ContextBuilder
+    from .context_builder import ContextBuilder, PatchContext
+
+    ctx_builder = ContextBuilder(task, kb=None)  # KB will be loaded in build_patch_context if needed
+    patch_ctx = PatchContext(
+        symbol=task.target.symbol,
+        analysis_json=analysis_json,
+        target_files=bundle.get("target_files", {}),
+        repository_knowledge_entry=repository_knowledge_entry,
+        existing_files_map=existing_map or None,
+        build_errors=build_errors_text,
+        debug_suggestions=debug_suggestions,
+        previous_code=previous_code,
+        kb_errors=kb_errors,
+        validation_feedback=validation_feedback,
+    )
+
     messages = [
         LlmMessage(role="system", content=system_prompt()),
-        LlmMessage(role="user", content=patch_generate_prompt(
-            symbol=task.target.symbol,
-            analysis_json=analysis_json,
-            target_files=bundle.get("target_files", {}),
-            repository_knowledge_entry=repository_knowledge_entry,
-            existing_files_map=existing_map or None,
-            build_errors=build_errors_text,
-            debug_suggestions=debug_suggestions,
-            previous_code=previous_code,
-            kb_errors=kb_errors,
-            validation_feedback=validation_feedback,
-        )),
+        LlmMessage(role="user", content=patch_generate_prompt(patch_ctx)),
     ]
     try:
         raw = chat_completion_with_retry(task.cfg.llm, messages, max_tokens=2800, stage="patch_generate", max_retries=3)
