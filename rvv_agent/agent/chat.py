@@ -65,7 +65,7 @@ from ..core.util import (
 )
 from dataclasses import asdict
 from ..memory.knowledge_base import KnowledgeBase, Pattern, ErrorRecord
-from ..tool.interactive import prompt_secret, prompt_text, prompt_yes_no
+from ..tool.interactive import prompt_text, prompt_yes_no
 
 
 # ---------------------------------------------------------------------------
@@ -762,7 +762,7 @@ def handle_build(task: TaskContext) -> TaskContext:
         else:
             print(f"\n构建成功 ✓")
             record_trajectory_action("build_success", "Build succeeded")
-            task.current_state = TaskState.KB_UPDATE
+            task.current_state = TaskState.TEST
     else:
         print(f"\n构建失败 (rc={make_result.returncode})")
         # Save build log with extracted errors
@@ -787,51 +787,147 @@ def handle_debug(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskCont
 
 
 def handle_test(task: TaskContext) -> TaskContext:
-    """TEST handler: placeholder for board/qemu testing."""
-    from ..tool.board import build_board_commands, local_checkasm_path, run_with_sshpass
+    """TEST handler: scp checkasm to board and run module-scoped test."""
+    from ..tool.board import (
+        analyze_checkasm_output,
+        build_board_commands,
+        local_checkasm_candidates,
+        local_checkasm_path,
+        run_with_sshpass,
+    )
+
+    checkasm_timeout_sec = 300
+
+    test_id = now_id()
 
     if not task.cfg.board.enabled:
         print("\n未启用 board 配置，跳过板端测试。")
         task.current_state = TaskState.KB_UPDATE
         return task
 
-    cmds = build_board_commands(task.cfg, task.ffmpeg_root)
+    module = task.target.module.strip()
+    cmds = build_board_commands(task.cfg, task.ffmpeg_root, module)
     local_bin = local_checkasm_path(task.ffmpeg_root, str(task.cfg.ffmpeg.build_dir))
+    checked_paths = [str(p) for p in local_checkasm_candidates(task.ffmpeg_root, str(task.cfg.ffmpeg.build_dir))]
 
     if not local_bin.exists():
-        print(f"\n本地 checkasm 不存在：{local_bin}，跳过板端测试。")
-        task.current_state = TaskState.KB_UPDATE
+        print("\n本地 checkasm 不存在，无法执行板端测试。")
+        for p in checked_paths:
+            print(f"- {p}")
+        task.save_artifact("TEST", {
+            "test_id": test_id,
+            "status": "failed",
+            "reason": "local_checkasm_missing",
+            "checked_paths": checked_paths,
+            "module": module,
+        })
+        task.all_build_errors.append(
+            "board_test_error: local checkasm not found; checked paths:\n" + "\n".join(checked_paths)
+        )
+        task.current_state = TaskState.DEBUG
         return task
 
     scp_ok = task.cfg.human.scp_ok
     if scp_ok is None:
         print("\n将把 checkasm scp 到测试板：")
         print("- " + fmt_argv(cmds.scp_argv))
-        scp_ok = prompt_yes_no("是否现在执行 scp？", default=False)
+        scp_ok = prompt_yes_no("是否现在执行 scp？", default=True)
         task.cfg.human.scp_ok = scp_ok
 
+    password = task.cfg.human.scp_password or ""
+    scp_rc: int | None = None
+    scp_stdout = ""
+    scp_stderr = ""
     if scp_ok:
-        password = task.cfg.human.scp_password
-        if not password:
-            password = prompt_secret("请输入测试板 SSH 密码： ")
-            task.cfg.human.scp_password = password
         res_scp = run_with_sshpass(cmds.scp_argv, password)
+        scp_rc = res_scp.returncode
+        scp_stdout = res_scp.stdout
+        scp_stderr = res_scp.stderr
         write_text(task.run_dir / "scp_stdout.txt", res_scp.stdout)
+        write_text(task.run_dir / "scp_stderr.txt", res_scp.stderr)
+        if res_scp.returncode != 0:
+            print(f"\nSCP 失败 (rc={res_scp.returncode})")
+            task.save_artifact("TEST", {
+                "test_id": test_id,
+                "status": "failed",
+                "phase": "scp",
+                "module": module,
+                "local_path": str(local_bin),
+                "remote_dir": task.cfg.board.remote_dir,
+                "scp_rc": res_scp.returncode,
+                "scp_stdout": scp_stdout,
+                "scp_stderr": scp_stderr,
+            })
+            task.all_build_errors.append(
+                f"board_test_error: scp failed (rc={res_scp.returncode})\n{scp_stdout}\n{scp_stderr}"
+            )
+            task.current_state = TaskState.DEBUG
+            return task
 
     run_ok = task.cfg.human.run_onboard_ok
     if run_ok is None:
-        run_ok = prompt_yes_no("是否在测试板上运行 checkasm？", default=False)
+        run_ok = prompt_yes_no("是否在测试板上运行 checkasm？", default=True)
         task.cfg.human.run_onboard_ok = run_ok
 
+    run_rc: int | None = None
+    run_stdout = ""
+    run_stderr = ""
     if run_ok:
-        password = task.cfg.human.scp_password
-        if not password:
-            password = prompt_secret("请输入测试板 SSH 密码： ")
-            task.cfg.human.scp_password = password
-        res_run = run_with_sshpass(cmds.ssh_run_argv, password)
+        res_run = run_with_sshpass(cmds.ssh_run_argv, password, timeout_sec=checkasm_timeout_sec)
+        run_rc = res_run.returncode
+        run_stdout = res_run.stdout
+        run_stderr = res_run.stderr
         write_text(task.run_dir / "board_stdout.txt", res_run.stdout)
+        write_text(task.run_dir / "board_stderr.txt", res_run.stderr)
+        write_text(
+            task.run_dir / "checkasm_output_snapshot.txt",
+            "=== stdout ===\n" + run_stdout + "\n\n=== stderr ===\n" + run_stderr + "\n",
+        )
+        run_eval = analyze_checkasm_output(run_stdout, run_stderr, run_rc)
+        if not run_eval.success:
+            timeout_hint = "（超时，已中断 ssh）" if run_eval.reason == "checkasm_timeout" else ""
+            print(f"\n板端 checkasm 运行失败 {timeout_hint} (rc={res_run.returncode}, reason={run_eval.reason})")
+            task.save_artifact("TEST", {
+                "test_id": test_id,
+                "status": "failed",
+                "phase": "run",
+                "module": module,
+                "local_path": str(local_bin),
+                "remote_dir": task.cfg.board.remote_dir,
+                "scp_ok": scp_ok,
+                "run_ok": run_ok,
+                "scp_rc": scp_rc,
+                "run_rc": res_run.returncode,
+                "run_reason": run_eval.reason,
+                "run_stdout": run_stdout,
+                "run_stderr": run_stderr,
+                "timeout_sec": checkasm_timeout_sec,
+            })
+            task.all_build_errors.append(
+                f"board_test_error: run failed (reason={run_eval.reason}, rc={res_run.returncode})\n"
+                f"{run_stdout}\n{run_stderr}"
+            )
+            task.current_state = TaskState.DEBUG
+            return task
 
-    task.save_artifact("TEST", {"status": "completed", "scp_ok": scp_ok, "run_ok": run_ok})
+    task.save_artifact("TEST", {
+        "test_id": test_id,
+        "status": "success",
+        "module": module,
+        "local_path": str(local_bin),
+        "remote_dir": task.cfg.board.remote_dir,
+        "scp_ok": scp_ok,
+        "run_ok": run_ok,
+        "scp_rc": scp_rc,
+        "run_rc": run_rc,
+        "scp_stdout": scp_stdout,
+        "scp_stderr": scp_stderr,
+        "run_stdout": run_stdout,
+        "run_stderr": run_stderr,
+        "timeout_sec": checkasm_timeout_sec,
+    })
+    print("\n板端测试成功 ✓")
+    record_trajectory_action("test_success", f"Board checkasm test succeeded for module={module}")
     task.current_state = TaskState.KB_UPDATE
     return task
 
@@ -976,8 +1072,18 @@ def handle_task_update(task: TaskContext) -> TaskContext:
     else:
         build_ok = False
 
+    test_ok = True
+    if task.cfg.board.enabled:
+        try:
+            test_artifact = task.load_artifact("TEST")
+            test_ok = str(test_artifact.get("status", "") or "") in {"success", "completed", "skipped"}
+        except Exception:
+            test_ok = False
+
+    overall_ok = build_ok and test_ok
+
     # On failure, roll back all workspace changes so ffmpeg stays compilable
-    if not build_ok:
+    if not overall_ok:
         try:
             from .patch import rollback_all_applies
             rollback_all_applies(task)
@@ -986,9 +1092,10 @@ def handle_task_update(task: TaskContext) -> TaskContext:
 
     now_ts = datetime.now().isoformat(timespec="seconds")
     task.task.finished_at = now_ts
-    task.task.status = TaskStatus.SUCCEEDED if build_ok else TaskStatus.FAILED
+    task.task.status = TaskStatus.SUCCEEDED if overall_ok else TaskStatus.FAILED
     task.task.summary = {
         "build_success": build_ok,
+        "test_success": test_ok,
         "debug_cycles": len(task.artifacts.debug_run_ids),
         "patch_count": len(task.artifacts.patch_ids),
     }

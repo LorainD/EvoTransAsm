@@ -20,7 +20,7 @@ from ..core.llm import LlmError, LlmMessage, chat_completion_with_retry, record_
 from ..core.prompts import system_prompt
 from ..core.prompts_patch import debug_classify_prompt
 from ..core.task import DebugArtifact, TaskContext, TaskState, load_plan_artifact
-from ..core.util import extract_build_errors, now_id, print_llm_error
+from ..core.util import extract_build_errors, now_id, print_llm_error, write_json
 from ..memory.knowledge_base import KnowledgeBase
 
 
@@ -236,6 +236,29 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
     root_cause = str(latest_build.get("error_type", "") or "build_failure")
     error_text = extract_build_errors(latest_build.get("stdout", "") + latest_build.get("stderr", ""))
 
+    test_artifact: dict[str, Any] = {}
+    test_id = ""
+    try:
+        test_artifact = task.load_artifact("TEST")
+        test_id = str(test_artifact.get("test_id", ""))
+    except Exception:
+        test_artifact = {}
+
+    test_status = str(test_artifact.get("status", "") or "")
+    if test_status == "failed":
+        test_reason = str(test_artifact.get("run_reason", "") or test_artifact.get("reason", "test_failed"))
+        phase = str(test_artifact.get("phase", "") or "run")
+        run_rc = test_artifact.get("run_rc", "n/a")
+        scp_rc = test_artifact.get("scp_rc", "n/a")
+        test_out = str(test_artifact.get("run_stdout", "") or test_artifact.get("scp_stdout", ""))
+        test_err = str(test_artifact.get("run_stderr", "") or test_artifact.get("scp_stderr", ""))
+        root_cause = f"test_failure:{phase}:{test_reason}"
+        extracted = extract_build_errors(test_out + "\n" + test_err)
+        error_text = (
+            f"Board test failed: phase={phase}, reason={test_reason}, run_rc={run_rc}, scp_rc={scp_rc}\n"
+            f"{extracted}"
+        ).strip()
+
     if not error_text.strip():
         if root_cause == "rvv_missing":
             error_text = (
@@ -249,6 +272,8 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
             return task
 
     error_class = classify_error(error_text)
+    if root_cause.startswith("test_failure:"):
+        error_class = ErrorClass.TEST_MISMATCH
     rollback = determine_rollback(error_class, error_text, task.cfg)
 
     print(f"\n[DEBUG] 错误分类: {error_class.value}")
@@ -256,13 +281,38 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
 
     kb_hints: list[str] = []
     debug_context: dict[str, Any] = {}
+    checkasm_llm_analysis = None
     try:
         from .context_builder import ContextBuilder, ContextConfig
+        builder = ContextBuilder(task, kb)
+        if root_cause.startswith("test_failure:"):
+            debug_context = builder.build_checkasm_debug_context(
+                test_artifact,
+                error_text,
+                config=ContextConfig(include_kb=True, include_errors=True),
+            )
+            write_json(task.run_dir / "checkasm_debug_context.json", debug_context)
 
-        debug_context = ContextBuilder(task, kb).build_debug_context(
-            error_text,
-            config=ContextConfig(include_kb=True, include_errors=True),
-        )
+            if task.cfg:
+                from ..tool.board import llm_analyze_checkasm_failure
+
+                checkasm_llm_analysis = llm_analyze_checkasm_failure(task.cfg, debug_context)
+                write_json(
+                    task.run_dir / "checkasm_debug_llm_result.json",
+                    {
+                        "ok": bool(checkasm_llm_analysis.ok),
+                        "error_class": checkasm_llm_analysis.error_class,
+                        "rollback_target": checkasm_llm_analysis.rollback_target,
+                        "fix_actions": checkasm_llm_analysis.fix_actions,
+                        "suggestion": checkasm_llm_analysis.suggestion,
+                        "raw": checkasm_llm_analysis.raw,
+                    },
+                )
+        else:
+            debug_context = builder.build_debug_context(
+                error_text,
+                config=ContextConfig(include_kb=True, include_errors=True),
+            )
     except Exception:
         debug_context = {}
 
@@ -295,7 +345,7 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
             run_id=now_id(),
             patch_id=patch_id,
             build_run_id=build_run_id,
-            test_id="",
+            test_id=test_id,
             iteration_no=iteration_no,
             error_class=error_class.value,
             error_text=error_text[:4000],
@@ -307,6 +357,16 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
     elif kb_hints:
         artifact.fix_actions = kb_hints + artifact.fix_actions
 
+    if checkasm_llm_analysis and checkasm_llm_analysis.ok:
+        if checkasm_llm_analysis.error_class:
+            artifact.error_class = checkasm_llm_analysis.error_class
+        if checkasm_llm_analysis.rollback_target:
+            artifact.rollback_target = checkasm_llm_analysis.rollback_target
+        if checkasm_llm_analysis.fix_actions:
+            artifact.fix_actions = checkasm_llm_analysis.fix_actions + artifact.fix_actions
+        if checkasm_llm_analysis.suggestion:
+            artifact.llm_suggestion = checkasm_llm_analysis.suggestion
+
     if not artifact.patch_id:
         artifact.patch_id = patch_id
     if not artifact.build_run_id:
@@ -315,6 +375,8 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
         artifact.iteration_no = iteration_no
     if not artifact.root_cause:
         artifact.root_cause = root_cause
+    if not artifact.test_id:
+        artifact.test_id = test_id
 
     if artifact.fix_actions:
         print("[DEBUG] 修复建议:")

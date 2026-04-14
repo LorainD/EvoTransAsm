@@ -204,3 +204,25 @@ def debug_classify_prompt(
 
 严格输出 JSON:
 {{"error_class": "...", "rollback_target": "...", "fix_actions": ["..."], "suggestion": "..."}}"""
+
+
+def checkasm_debug_prompt(context: dict) -> str:
+    """Prompt for board-side checkasm failure analysis."""
+    return f"""你是 FFmpeg RVV/checkasm 调试专家。
+
+请基于下面的板测上下文分析失败原因，并给出可执行修复建议。
+
+## checkasm 失败上下文
+{json.dumps(context, ensure_ascii=False, indent=2)[:12000]}
+
+## 任务
+1. 判断错误分类: compile_error | link_error | runtime_error | test_mismatch
+2. 判断回滚目标:
+   - locate: patch 应用位置/锚点错误
+   - design: 构建系统/注册/Makefile/初始化路径错误
+   - generate: 代码逻辑/指令/边界处理错误
+3. 给出 3-8 条 fix_actions（每条尽量具体到文件或修改方向）
+4. 输出一段简短建议 suggestion
+
+严格输出 JSON：
+{{"error_class":"...","rollback_target":"...","fix_actions":["..."],"suggestion":"..."}}"""

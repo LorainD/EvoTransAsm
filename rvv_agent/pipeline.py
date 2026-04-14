@@ -17,6 +17,7 @@ from .agent.chat import (
     handle_func_discover,
     handle_kb_update,
     handle_patch,
+    handle_test,
     handle_task_update,
 )
 from .agent.plan import fixed_plan
@@ -224,7 +225,7 @@ def _handle_build_pipeline(task: TaskContext) -> TaskContext:
         else:
             print("[pipeline] 构建成功 ✓")
             record_trajectory_action("build_success", "Build succeeded")
-            task.current_state = TaskState.KB_UPDATE
+            task.current_state = TaskState.TEST
     else:
         print(f"[pipeline] 构建失败 (rc={make_result.returncode})")
         error_extract = extract_build_errors(make_result.stdout + make_result.stderr)
@@ -262,8 +263,22 @@ def _derive_exec_result(task: TaskContext) -> tuple[bool, str]:
             make_rc = b.get("exitcode", -1)
 
     last_build = task.load_artifact("BUILD", sub_id=task.artifacts.build_run_ids[-1])
-    exec_failed = last_build.get("exitcode", -1) != 0 or str(last_build.get("error_type", "") or "") == "rvv_missing"
-    exec_summary = f"configure_rc={configure_rc} checkasm_build_rc={make_rc}"
+    build_failed = last_build.get("exitcode", -1) != 0 or str(last_build.get("error_type", "") or "") == "rvv_missing"
+
+    test_status = "skipped"
+    test_rc: int | str = "skipped"
+    if task.cfg.board.enabled:
+        try:
+            test_artifact = task.load_artifact("TEST")
+            test_status = str(test_artifact.get("status", "") or "missing")
+            run_rc = test_artifact.get("run_rc", None)
+            if isinstance(run_rc, int):
+                test_rc = run_rc
+        except Exception:
+            test_status = "missing"
+
+    exec_failed = build_failed or (task.cfg.board.enabled and test_status != "success")
+    exec_summary = f"configure_rc={configure_rc} checkasm_build_rc={make_rc} test_status={test_status} test_rc={test_rc}"
     return exec_failed, exec_summary
 
 
@@ -330,6 +345,11 @@ def run_migrate(
     # 1. Pre-configure HumanConfig for non-interactive mode
     cfg.human.apply_ok = apply
     cfg.human.exec_ok = do_exec
+    if cfg.board.enabled:
+        if cfg.human.scp_ok is None:
+            cfg.human.scp_ok = True
+        if cfg.human.run_onboard_ok is None:
+            cfg.human.run_onboard_ok = True
 
     # 2. Build MigrationTarget
     module = symbol.split(".")[0] if "." in symbol else symbol
@@ -372,6 +392,7 @@ def run_migrate(
         TaskState.PATCH:     lambda t: handle_patch(t, kb),
         TaskState.BUILD:     _handle_build_pipeline,
         TaskState.DEBUG:     lambda t: handle_debug(t, kb),
+        TaskState.TEST:      handle_test,
         TaskState.KB_UPDATE: lambda t: handle_kb_update(t, kb),
         TaskState.TASK_UPDATE: handle_task_update,
     }

@@ -172,6 +172,54 @@ class ContextBuilder:
 
         return ctx
 
+    def build_checkasm_debug_context(
+        self,
+        test_artifact: dict,
+        error_text: str,
+        config: ContextConfig | None = None,
+    ) -> dict:
+        """Build context for board/checkasm failure analysis."""
+        config = config or ContextConfig()
+
+        ctx: dict = {
+            "target": {
+                "symbol": self.task.target.symbol,
+                "module": self.task.target.module,
+            },
+            "board": {
+                "enabled": bool(self.task.cfg.board.enabled) if self.task.cfg else False,
+                "host": str(getattr(self.task.cfg.board, "host", "")) if self.task.cfg else "",
+                "port": int(getattr(self.task.cfg.board, "port", 22)) if self.task.cfg else 22,
+                "remote_dir": str(getattr(self.task.cfg.board, "remote_dir", "")) if self.task.cfg else "",
+            },
+            "test_result": {
+                "status": str(test_artifact.get("status", "")),
+                "phase": str(test_artifact.get("phase", "")),
+                "module": str(test_artifact.get("module", "")),
+                "run_reason": str(test_artifact.get("run_reason", "")),
+                "run_rc": test_artifact.get("run_rc", "n/a"),
+                "scp_rc": test_artifact.get("scp_rc", "n/a"),
+            },
+            "current_error": error_text[: config.max_error_lines],
+            "checkasm_stdout": str(test_artifact.get("run_stdout", "") or "")[:8000],
+            "checkasm_stderr": str(test_artifact.get("run_stderr", "") or "")[:8000],
+        }
+
+        if self.task.all_build_errors:
+            ctx["error_history"] = "\n---\n".join(self.task.all_build_errors[-5:])[: config.max_error_lines]
+
+        if config.include_kb and self.kb:
+            known = self.kb.search_errors(error_class="test_mismatch", max_results=3)
+            ctx["known_fixes"] = [
+                {
+                    "pattern": f.pattern[:100],
+                    "fix_strategy": f.fix_strategy,
+                }
+                for f in known
+            ]
+
+        return ctx
+
     def build_patch_context(
         self,
         symbol: str,
