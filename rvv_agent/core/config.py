@@ -72,6 +72,32 @@ class AppConfig:
     human: HumanConfig = field(default_factory=HumanConfig)
 
 
+def is_board_enabled(cfg: "AppConfig") -> bool:
+    """Return whether board testing should be treated as enabled.
+
+    Besides the explicit ``board.enabled`` flag, treat board testing
+    as enabled if essential connection fields (``user`` and ``host``)
+    are non-empty. This makes the behaviour robust against historical
+    configs or partial writes where the boolean flag was not persisted
+    correctly but the connection parameters are present.
+    """
+
+    b = cfg.board
+
+    # Explicit flag takes precedence when True.
+    if getattr(b, "enabled", False):
+        return True
+
+    # Fallback: if user/host are configured, assume the user intends
+    # to run board tests even if ``enabled`` was left at its default.
+    user = str(getattr(b, "user", "")).strip()
+    host = str(getattr(b, "host", "")).strip()
+    if user and host:
+        return True
+
+    return False
+
+
 def _as_path(v: object) -> Path | None:
     if v is None:
         return None

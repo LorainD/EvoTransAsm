@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass, field
 
 from ..core.task import TaskContext
+from ..core.config import is_board_enabled
 from ..memory.knowledge_base import KnowledgeBase
 
 
@@ -187,7 +188,7 @@ class ContextBuilder:
                 "module": self.task.target.module,
             },
             "board": {
-                "enabled": bool(self.task.cfg.board.enabled) if self.task.cfg else False,
+                "enabled": bool(is_board_enabled(self.task.cfg)) if self.task.cfg else False,
                 "host": str(getattr(self.task.cfg.board, "host", "")) if self.task.cfg else "",
                 "port": int(getattr(self.task.cfg.board, "port", 22)) if self.task.cfg else 22,
                 "remote_dir": str(getattr(self.task.cfg.board, "remote_dir", "")) if self.task.cfg else "",

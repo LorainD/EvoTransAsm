@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from ..core.config import AppConfig
+from ..core.config import AppConfig, is_board_enabled
 from ..core.llm import (
     LlmMessage,
     chat_completion_with_retry,
@@ -799,13 +799,35 @@ def handle_test(task: TaskContext) -> TaskContext:
     checkasm_timeout_sec = 300
 
     test_id = now_id()
+    module = task.target.module.strip()
 
-    if not task.cfg.board.enabled:
+    # Use centralised helper instead of the raw boolean flag so that
+    # board tests are not accidentally skipped when connection
+    # parameters are present but ``enabled`` was left at its default.
+    if not is_board_enabled(task.cfg):
         print("\n未启用 board 配置，跳过板端测试。")
         task.current_state = TaskState.KB_UPDATE
         return task
 
-    module = task.target.module.strip()
+    # 高层一次性确认：是否在本轮执行板端测试。
+    run_board = task.cfg.human.run_onboard_ok
+    if run_board is None:
+        print("\n已检测到 board 配置，准备执行板端 checkasm 测试：")
+        run_board = prompt_yes_no("是否在本轮执行板端测试？", default=True)
+        task.cfg.human.run_onboard_ok = run_board
+
+    if not run_board:
+        print("\n已根据用户选择跳过板端测试。")
+        task.save_artifact("TEST", {
+            "test_id": test_id,
+            "status": "skipped",
+            "phase": "precheck",
+            "module": module,
+            "run_reason": "user_opt_out",
+        })
+        task.current_state = TaskState.KB_UPDATE
+        return task
+
     cmds = build_board_commands(task.cfg, task.ffmpeg_root, module)
     local_bin = local_checkasm_path(task.ffmpeg_root, str(task.cfg.ffmpeg.build_dir))
     checked_paths = [str(p) for p in local_checkasm_candidates(task.ffmpeg_root, str(task.cfg.ffmpeg.build_dir))]
@@ -1073,7 +1095,7 @@ def handle_task_update(task: TaskContext) -> TaskContext:
         build_ok = False
 
     test_ok = True
-    if task.cfg.board.enabled:
+    if is_board_enabled(task.cfg):
         try:
             test_artifact = task.load_artifact("TEST")
             test_ok = str(test_artifact.get("status", "") or "") in {"success", "completed", "skipped"}

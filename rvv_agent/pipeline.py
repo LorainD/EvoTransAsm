@@ -37,6 +37,7 @@ from .core.task import (
     TaskStatus,
     load_func_discover_artifact,
 )
+from .core.config import is_board_enabled
 from .core.util import (
     ensure_dir,
     extract_build_errors,
@@ -267,7 +268,7 @@ def _derive_exec_result(task: TaskContext) -> tuple[bool, str]:
 
     test_status = "skipped"
     test_rc: int | str = "skipped"
-    if task.cfg.board.enabled:
+    if is_board_enabled(task.cfg):
         try:
             test_artifact = task.load_artifact("TEST")
             test_status = str(test_artifact.get("status", "") or "missing")
@@ -277,7 +278,7 @@ def _derive_exec_result(task: TaskContext) -> tuple[bool, str]:
         except Exception:
             test_status = "missing"
 
-    exec_failed = build_failed or (task.cfg.board.enabled and test_status != "success")
+    exec_failed = build_failed or (is_board_enabled(task.cfg) and test_status != "success")
     exec_summary = f"configure_rc={configure_rc} checkasm_build_rc={make_rc} test_status={test_status} test_rc={test_rc}"
     return exec_failed, exec_summary
 
@@ -345,7 +346,7 @@ def run_migrate(
     # 1. Pre-configure HumanConfig for non-interactive mode
     cfg.human.apply_ok = apply
     cfg.human.exec_ok = do_exec
-    if cfg.board.enabled:
+    if is_board_enabled(cfg):
         if cfg.human.scp_ok is None:
             cfg.human.scp_ok = True
         if cfg.human.run_onboard_ok is None:
