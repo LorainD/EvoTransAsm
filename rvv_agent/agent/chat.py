@@ -73,10 +73,34 @@ from ..tool.interactive import prompt_text, prompt_yes_no
 # ---------------------------------------------------------------------------
 
 def _print_llm_probe(cfg: AppConfig) -> None:
-    st = probe_llm(cfg.llm)
+    """Print best-effort LLM health status without crashing on probe errors."""
+
     print("LLM status:")
-    print(f"- endpoint_url: {st.get('endpoint_url')}")
-    print(f"- model: {st.get('model')}")
+    try:
+        st = probe_llm(cfg.llm)
+    except Exception as e:
+        endpoint = getattr(cfg.llm, "base_url", "")
+        model = getattr(cfg.llm, "model", "")
+        print(f"- endpoint_url: {endpoint}")
+        print(f"- model: {model}")
+        print("- probe_ok: False")
+        print(f"- probe_error: {e}")
+        return
+
+    if not isinstance(st, dict):
+        endpoint = getattr(cfg.llm, "base_url", "")
+        model = getattr(cfg.llm, "model", "")
+        print(f"- endpoint_url: {endpoint}")
+        print(f"- model: {model}")
+        print("- probe_ok: False")
+        print(f"- probe_error: unexpected probe_llm() return type: {type(st).__name__}")
+        return
+
+    endpoint = st.get("endpoint_url", getattr(cfg.llm, "base_url", ""))
+    model = st.get("model", getattr(cfg.llm, "model", ""))
+
+    print(f"- endpoint_url: {endpoint}")
+    print(f"- model: {model}")
     print(f"- api_key_present: {st.get('api_key_present')}")
     print(f"- probe_ok: {st.get('probe_ok')}")
     if st.get("probe_ok"):
