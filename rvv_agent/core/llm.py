@@ -459,10 +459,39 @@ def chat_completion_with_retry(
 
 
 def probe_llm(cfg: LlmConfig) -> dict[str, object]:
+    """Probe LLM endpoint health without raising on failure.
+
+    返回一个 status dict，至少包含：
+    - endpoint_url / model / api_key_present
+    - probe_ok: bool
+    - probe_reply 或 probe_error
+    """
+
     status = llm_status(cfg)
     try:
         status["endpoint_url_normalized"] = _endpoint_url(cfg)
-    except Exception as e:
+    except Exception as e:  # e.g. missing base_url
+        status["probe_ok"] = False
+        status["probe_error"] = str(e)
+        return status
+
+    probe_timeout = float(os.getenv("RVV_AGENT_LLM_PROBE_TIMEOUT", "10"))
+
+    try:
+        text = chat_completion(
+            cfg,
+            [
+                LlmMessage(role="system", content="You are a helpful assistant."),
+                LlmMessage(role="user", content="Reply with: OK"),
+            ],
+            max_tokens=8,
+            timeout_seconds=probe_timeout,
+            stage="probe",
+        )
+        status["probe_ok"] = True
+        status["probe_reply"] = text.strip()[:200]
+        return status
+    except Exception as e:  # noqa: BLE001
         status["probe_ok"] = False
         status["probe_error"] = str(e)
         return status
@@ -622,24 +651,3 @@ def run_tool_use_loop(
         break
 
     return messages, final_result
-
-    probe_timeout = float(os.getenv("RVV_AGENT_LLM_PROBE_TIMEOUT", "10"))
-
-    try:
-        text = chat_completion(
-            cfg,
-            [
-                LlmMessage(role="system", content="You are a helpful assistant."),
-                LlmMessage(role="user", content="Reply with: OK"),
-            ],
-            max_tokens=8,
-            timeout_seconds=probe_timeout,
-            stage="probe",
-        )
-        status["probe_ok"] = True
-        status["probe_reply"] = text.strip()[:200]
-        return status
-    except Exception as e:
-        status["probe_ok"] = False
-        status["probe_error"] = str(e)
-        return status
