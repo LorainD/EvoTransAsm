@@ -314,7 +314,7 @@ def analyze_with_llm(
         llm_used=llm_used_any,
     )
 
-
+### 下面两个函数没有被调用
 def update_function_analysis(
     artifact: AnalysisArtifact,
     function_name: str,

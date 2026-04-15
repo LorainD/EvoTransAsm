@@ -28,11 +28,19 @@ from ..memory.knowledge_base import KnowledgeBase
 # Error classification
 # ---------------------------------------------------------------------------
 
+
 class ErrorClass(Enum):
-    COMPILE_ERROR = "compile_error"
-    LINK_ERROR = "link_error"
-    RUNTIME_ERROR = "runtime_error"
-    TEST_MISMATCH = "test_mismatch"
+    """High-level error stage tag where the failure surfaced.
+
+    Fine-grained kinds (compile_error / link_error / runtime_error /
+    test_mismatch, inject_error hints, etc.) are carried separately in
+    DebugArtifact.error_note and/or root_cause.
+    """
+
+    CONFIGURE_ERROR = "configure_error"
+    BUILD_ERROR = "build_error"
+    TEST_ERROR = "test_error"
+    PATCH_ERROR = "patch_error"
 
 
 class RollbackTarget(Enum):
@@ -41,20 +49,23 @@ class RollbackTarget(Enum):
     GENERATE = "generate"   # code syntax / logic error
 
 
-def classify_error(build_output: str) -> ErrorClass:
-    """Rule-based error classification."""
+def classify_error(build_output: str) -> str:
+    """Rule-based fine-grained classification for notes / heuristics.
+
+    Returns one of: compile_error | link_error | runtime_error | test_mismatch.
+    """
     lower = build_output.lower()
     if "undefined reference" in lower or "ld returned" in lower:
-        return ErrorClass.LINK_ERROR
+        return "link_error"
     if "fail" in lower and ("mismatch" in lower or "checkasm" in lower):
-        return ErrorClass.TEST_MISMATCH
+        return "test_mismatch"
     if "segfault" in lower or "sigsegv" in lower:
-        return ErrorClass.RUNTIME_ERROR
-    return ErrorClass.COMPILE_ERROR
+        return "runtime_error"
+    return "compile_error"
 
 
 def determine_rollback(
-    error_class: ErrorClass,
+    error_kind: str,
     error_text: str,
     cfg: AppConfig | None = None,
 ) -> RollbackTarget:
@@ -64,25 +75,22 @@ def determine_rollback(
     """
     lower = error_text.lower()
 
-    # Rule-based heuristics
-    if error_class == ErrorClass.LINK_ERROR:
+    # Rule-based heuristics based on content (kept for fallback when LLM fails).
+    if error_kind == "link_error" or "undefined reference" in lower or "ld returned" in lower:
         if "undefined reference" in lower and "init_riscv" in lower:
             return RollbackTarget.DESIGN  # Makefile didn't add the file
-        if "no such file" in lower:
+        if "no such file" in lower or "no such file or directory" in lower:
             return RollbackTarget.LOCATE
         return RollbackTarget.DESIGN
 
-    if error_class == ErrorClass.COMPILE_ERROR:
-        if "no such file or directory" in lower:
+    if error_kind == "compile_error":
+        if "no such file or directory" in lower or "no such file" in lower:
             return RollbackTarget.LOCATE
         if "makefile" in lower or "no rule to make" in lower:
             return RollbackTarget.DESIGN
         return RollbackTarget.GENERATE
 
-    if error_class == ErrorClass.TEST_MISMATCH:
-        return RollbackTarget.GENERATE
-
-    if error_class == ErrorClass.RUNTIME_ERROR:
+    if error_kind in {"test_mismatch", "runtime_error"}:
         return RollbackTarget.GENERATE
 
     return RollbackTarget.GENERATE
@@ -142,10 +150,11 @@ def _llm_classify(
             build_run_id=build_run_id,
             test_id="",
             iteration_no=iteration_no,
-            error_class=str(data.get("error_class", "compile_error")),
+            error_class=str(data.get("error_class", "")),
             error_text=error_text[:4000],
             root_cause=str(data.get("root_cause", root_cause)),
-            rollback_target=str(data.get("rollback_target", "generate")),
+            error_note=str(data.get("error_note", "")),
+            rollback_target=str(data.get("rollback_target", "")),
             fix_actions=[str(a) for a in data.get("fix_actions", [])],
             llm_suggestion=str(data.get("suggestion", "")),
         )
@@ -271,13 +280,21 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
             task.current_state = TaskState.TASK_UPDATE
             return task
 
-    error_class = classify_error(error_text)
-    if root_cause.startswith("test_failure:"):
-        error_class = ErrorClass.TEST_MISMATCH
-    rollback = determine_rollback(error_class, error_text, task.cfg)
+    # Derive a stage-level default error_class from where the failure surfaced.
+    # This tag is later refined (or confirmed) by the LLM; the fine-grained kind
+    # is captured separately via classify_error/error_note.
+    default_error_class = ErrorClass.BUILD_ERROR
+    phase = str(latest_build.get("phase", "") or "").lower()
+    if phase == "configure":
+        default_error_class = ErrorClass.CONFIGURE_ERROR
 
-    print(f"\n[DEBUG] 错误分类: {error_class.value}")
-    print(f"[DEBUG] 回滚目标: {rollback.value}")
+    if root_cause.startswith("test_failure:") or test_status == "failed":
+        default_error_class = ErrorClass.TEST_ERROR
+
+    # Fallback fine-grained kind + rollback target, used only when LLM is
+    # unavailable or fails to return a valid decision.
+    fine_error_kind = classify_error(error_text)
+    fallback_rollback = determine_rollback(fine_error_kind, error_text, task.cfg)
 
     kb_hints: list[str] = []
     debug_context: dict[str, Any] = {}
@@ -317,7 +334,9 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
         debug_context = {}
 
     if kb:
-        known = kb.search_errors(error_class=error_class.value, max_results=3)
+        # 知识库按细粒度错误类型索引（compile_error/link_error/...），因此使用
+        # fine_error_kind 作为查询 key，而不是阶段级的 error_class tag。
+        known = kb.search_errors(error_class=fine_error_kind, max_results=3)
         for rec in known:
             if rec.fix_strategy:
                 kb_hints.append(f"[KB] {rec.pattern[:80]} -> {rec.fix_strategy}")
@@ -340,6 +359,10 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
             root_cause=root_cause,
         )
 
+    # If LLM is unavailable or failed to return a valid artifact, fall back to
+    # rule-based classification and rollback heuristics. Stage-level
+    # error_class is derived from the failure phase, while fine-grained
+    # information goes into error_note/root_cause.
     if artifact is None:
         artifact = DebugArtifact(
             run_id=now_id(),
@@ -347,19 +370,33 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
             build_run_id=build_run_id,
             test_id=test_id,
             iteration_no=iteration_no,
-            error_class=error_class.value,
+            error_class=default_error_class.value,
             error_text=error_text[:4000],
             root_cause=root_cause,
-            rollback_target=rollback.value,
+            error_note=fine_error_kind,
+            rollback_target=fallback_rollback.value,
             fix_actions=kb_hints,
             llm_suggestion="",
         )
-    elif kb_hints:
-        artifact.fix_actions = kb_hints + artifact.fix_actions
+    else:
+        # Ensure stage-level tag and rollback target are valid and have
+        # sensible defaults even if the LLM output is partial or malformed.
+        if artifact.error_class not in {e.value for e in ErrorClass}:
+            artifact.error_class = default_error_class.value
+        if artifact.rollback_target not in {e.value for e in RollbackTarget}:
+            artifact.rollback_target = fallback_rollback.value
+        if not artifact.error_note:
+            artifact.error_note = fine_error_kind
+        if kb_hints:
+            artifact.fix_actions = kb_hints + artifact.fix_actions
 
     if checkasm_llm_analysis and checkasm_llm_analysis.ok:
         if checkasm_llm_analysis.error_class:
-            artifact.error_class = checkasm_llm_analysis.error_class
+            prefix = f"[checkasm:{checkasm_llm_analysis.error_class}]"
+            if artifact.error_note:
+                artifact.error_note = f"{prefix} {artifact.error_note}"
+            else:
+                artifact.error_note = prefix
         if checkasm_llm_analysis.rollback_target:
             artifact.rollback_target = checkasm_llm_analysis.rollback_target
         if checkasm_llm_analysis.fix_actions:
@@ -377,6 +414,9 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
         artifact.root_cause = root_cause
     if not artifact.test_id:
         artifact.test_id = test_id
+
+    print(f"\n[DEBUG] 错误阶段(tag): {artifact.error_class}")
+    print(f"[DEBUG] 回滚目标: {artifact.rollback_target}")
 
     if artifact.fix_actions:
         print("[DEBUG] 修复建议:")

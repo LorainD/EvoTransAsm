@@ -195,15 +195,19 @@ def debug_classify_prompt(
 {patch_section}
 
 ## 任务
-1. 将错误分类为: compile_error | link_error | runtime_error | test_mismatch
-2. 确定回滚目标:
-   - "locate": 锚点漂移或 patch 应用位置错误
-   - "design": 构建系统问题（Makefile 未添加文件、缺少头文件包含等）
-   - "generate": 代码本身有语法/逻辑错误
-3. 给出具体修复建议
+1. 判定错误出现的阶段（高层 tag）: configure_error | build_error | test_error | patch_error
+2. 在 error_note 中给出细粒度分类和原因说明，例如:
+    - compile_error / link_error / runtime_error / test_mismatch
+    - 是 Makefile/注册问题，还是没有真正插入代码（inject_error）
+    - 是 rvv_missing 这类语义错误，还是纯编译/链接错误
+3. 确定回滚目标 rollback_target:
+    - "locate": 锚点漂移或 patch 应用位置错误
+    - "design": 构建系统问题（Makefile 未添加文件、缺少头文件包含等）
+    - "generate": 代码本身有语法/逻辑错误
+4. 给出具体修复建议（fix_actions）和一个简短的建议总结（suggestion）
 
 严格输出 JSON:
-{{"error_class": "...", "rollback_target": "...", "fix_actions": ["..."], "suggestion": "..."}}"""
+{{"error_class": "...", "error_note": "...", "rollback_target": "...", "fix_actions": ["..."], "suggestion": "..."}}"""
 
 
 def checkasm_debug_prompt(context: dict) -> str:

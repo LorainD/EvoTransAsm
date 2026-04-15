@@ -243,9 +243,15 @@ class DebugArtifact:
     build_run_id: str = ""
     test_id: str = ""
     iteration_no: int = 0
-    error_class: str = ""       # compile_error | link_error | runtime_error | test_mismatch
+    # High-level error tag, decided by the stage where the error surfaced
+    # (configure_error | build_error | test_error | patch_error).
+    error_class: str = ""
     error_text: str = ""
     root_cause: str = ""
+    # Free-form note from LLM or rule-based fallback describing fine-grained
+    # classification details (compile/link/runtime/test_mismatch, anchor drift,
+    # Makefile issues, inject_error hints, etc.).
+    error_note: str = ""
     rollback_target: str = ""   # locate | design | generate
     fix_actions: list[str] = field(default_factory=list)
     llm_suggestion: str = ""

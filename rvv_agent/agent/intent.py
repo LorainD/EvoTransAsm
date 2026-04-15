@@ -109,18 +109,12 @@ def _build_target(symbol: str) -> MigrationTarget | None:
         module = symbol
     return MigrationTarget(module=module, symbol=symbol)
 
-
+#TODO：llm识别target和module的优先级应该高于硬编码，硬编码作为fallback
 def parse_intent(cfg: AppConfig, user_text: str) -> Intent:
     wants_migrate = _has_ffmpeg_context(user_text) and _looks_like_migrate(user_text)
     sym = _extract_symbol_heuristic(user_text)
 
-    if sym and user_text.strip() == sym:
-        return Intent(action="migrate", raw="heuristic:symbol_only",
-                      llm_used=False, target=_build_target(sym))
-    if wants_migrate and sym:
-        return Intent(action="migrate", raw="heuristic:migrate",
-                      llm_used=False, target=_build_target(sym))
-
+    # 1) 若有 LLM，可用时优先走 LLM 解析；启发式仅作为兜底
     if api_key_present(cfg.llm):
         messages = [
             LlmMessage(role="system", content=system_prompt()),
@@ -132,6 +126,7 @@ def parse_intent(cfg: AppConfig, user_text: str) -> Intent:
             action = str(data.get("action", "chat")).strip().lower()
             if action not in {"chat", "migrate"}:
                 action = "chat"
+            # LLM 解析出的 symbol 优先，其次再回退到启发式识别的 symbol
             symbol = str(data.get("symbol", "")).strip() or sym
             if wants_migrate and action != "migrate":
                 action = "migrate"
@@ -152,6 +147,14 @@ def parse_intent(cfg: AppConfig, user_text: str) -> Intent:
             action = "migrate" if wants_migrate else "chat"
             return Intent(action=action, raw=repr(e),
                           llm_used=False, error=repr(e), target=_build_target(sym) if action == "migrate" else None)
+
+    # 2) 无可用 LLM 时，再使用启发式规则作为主流程
+    if sym and user_text.strip() == sym:
+        return Intent(action="migrate", raw="heuristic:symbol_only",
+                      llm_used=False, target=_build_target(sym))
+    if wants_migrate and sym:
+        return Intent(action="migrate", raw="heuristic:migrate",
+                      llm_used=False, target=_build_target(sym))
 
     action = "migrate" if wants_migrate else "chat"
     return Intent(action=action, raw="no_llm",
