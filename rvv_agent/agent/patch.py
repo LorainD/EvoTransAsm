@@ -8,12 +8,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import asdict
 from pathlib import Path
 
 from ..core.config import AppConfig
-from ..core.llm import LlmError, LlmMessage, chat_completion_with_retry, record_trajectory_action
+from ..core.llm import (
+    LlmError,
+    LlmMessage,
+    ToolSpec,
+    chat_completion_with_retry,
+    record_trajectory_action,
+    run_tool_use_loop,
+)
 from ..core.prompts import system_prompt
 from ..core.prompts_patch import (
     debug_classify_prompt,
@@ -24,8 +32,9 @@ from ..core.task import (
     TaskContext,
     TaskState,
 )
-from ..core.util import ensure_dir, now_id, write_json, write_text
+from ..core.util import ensure_dir, now_id, write_json, write_text, extract_build_errors, fmt_argv
 from ..tool.interactive import prompt_yes_no
+from ..tool.exec import run_configure, run_make_checkasm, configure_argv, make_checkasm_argv
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +137,132 @@ def rollback_all_applies(task: TaskContext) -> None:
 
     if total:
         print(f"[PATCH] session 失败，已将 ffmpeg 工作区回滚 {total} 个文件到本次侵入前状态")
+
+
+# ---------------------------------------------------------------------------
+# Tool-use helpers (first batch of tools for PATCH/BUILD/ROLLBACK)
+# ---------------------------------------------------------------------------
+
+
+def _build_patch_tools(task: TaskContext) -> list[ToolSpec]:
+    """Construct ToolSpec list for PATCH/BUILD tool-use loop.
+
+    这一批工具专门为后续的 run_patch_with_tools 设计，目前覆盖：
+    - read_file: 在 ffmpeg_root 沙箱内读取文件内容；
+    - write_patch: 利用 apply_patch 的核心逻辑对单个 patch 进行写入；
+    - run_build: 触发一次 configure + make checkasm 构建（与 pipeline BUILD 一致）；
+    - rollback_last_apply: 回滚最近一次 apply_ 快照。
+
+    注意：ToolSpec.func 通过闭包捕获 TaskContext，确保所有文件操作
+    都限制在 task.ffmpeg_root 下，不越界到工作区之外。
+    """
+
+    ffmpeg_root = task.ffmpeg_root
+
+    def _tool_read_file(args: dict) -> dict:
+        rel = str(args.get("path", "")).strip()
+        max_chars = int(args.get("max_chars", 4000) or 4000)
+        if not rel:
+            return {"ok": False, "error": "missing path"}
+        full = ffmpeg_root / rel
+        if not full.exists() or not full.is_file():
+            return {"ok": False, "error": "not_found", "exists": False}
+        try:
+            text = full.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"read_failed: {e}"}
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n... (truncated)"
+        return {"ok": True, "exists": True, "path": rel, "content": text}
+
+    def _tool_write_patch(args: dict) -> dict:
+        """Apply a single patch item using apply_patch semantics."""
+        raw_item = {
+            "target_path": str(args.get("target_path", "")),
+            "action": str(args.get("action", "create") or "create"),
+            "content": str(args.get("content", "")),
+            "anchor_hint": str(args.get("anchor_hint", "")),
+            "description": str(args.get("description", "")),
+        }
+        plan = {"generate_plan": {"patches": [raw_item]}, "generated": [raw_item]}
+        artifact = apply_patch(task, plan)
+        return {
+            "ok": artifact.success,
+            "patch_id": artifact.patch_id,
+            "applied_paths": artifact.applied_paths,
+            "error": artifact.error,
+        }
+
+    def _tool_run_build(args: dict) -> dict:
+        build_dir = ffmpeg_root / task.cfg.ffmpeg.build_dir
+        ensure_dir(build_dir)
+        jobs = int(args.get("jobs") or task.jobs or (os.cpu_count() or 1))
+        jobs = max(1, jobs)
+
+        cfg_res = run_configure(task.cfg, ffmpeg_root, build_dir)
+        cfg_err = extract_build_errors(cfg_res.stdout + cfg_res.stderr)
+        if cfg_res.returncode != 0:
+            return {
+                "phase": "configure",
+                "ok": False,
+                "exitcode": cfg_res.returncode,
+                "cmd": fmt_argv(configure_argv(task.cfg, ffmpeg_root)),
+                "errors": cfg_err,
+            }
+
+        make_res = run_make_checkasm(task.cfg, build_dir, jobs)
+        make_err = extract_build_errors(make_res.stdout + make_res.stderr)
+        return {
+            "phase": "make",
+            "ok": make_res.returncode == 0,
+            "exitcode": make_res.returncode,
+            "cmd": fmt_argv(make_checkasm_argv(jobs=jobs)),
+            "errors": make_err,
+        }
+
+    def _tool_rollback_last_apply(args: dict) -> dict:  # noqa: ARG001
+        before_ids = list(task.artifacts.patch_ids)
+        _rollback_previous_apply(task)
+        after_ids = list(task.artifacts.patch_ids)
+        return {
+            "ok": True,
+            "note": "rollback_previous_apply executed",
+            "patch_ids_before": before_ids,
+            "patch_ids_after": after_ids,
+        }
+
+    return [
+        ToolSpec(
+            name="read_file",
+            description="读取 FFmpeg 工作区内指定相对路径的文件内容",
+            parameters={"path": {"type": "string"}, "max_chars": {"type": "integer", "optional": True}},
+            func=_tool_read_file,
+        ),
+        ToolSpec(
+            name="write_patch",
+            description="将生成的单个 patch 应用到 ffmpeg_root 下（create/append/replace）",
+            parameters={
+                "target_path": {"type": "string"},
+                "action": {"type": "string"},
+                "content": {"type": "string"},
+                "anchor_hint": {"type": "string", "optional": True},
+                "description": {"type": "string", "optional": True},
+            },
+            func=_tool_write_patch,
+        ),
+        ToolSpec(
+            name="run_build",
+            description="在当前 ffmpeg_root 下执行 configure + make checkasm 构建",
+            parameters={"jobs": {"type": "integer", "optional": True}},
+            func=_tool_run_build,
+        ),
+        ToolSpec(
+            name="rollback_last_apply",
+            description="回滚最近一次 apply 对工作区的修改",
+            parameters={},
+            func=_tool_rollback_last_apply,
+        ),
+    ]
 
 
 def _build_group_scoped_analysis(task: TaskContext) -> dict:
@@ -893,6 +1028,132 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
     record_trajectory_action(
         "patch_route_decision",
         f"patch_apply_fail -> {next_state.value}, reason={route_reason}, error={artifact.error}",
+    )
+
+    if next_state == TaskState.PATCH:
+        task.artifacts.group_iteration_count += 1
+        if task.artifacts.group_iteration_count >= _MAX_PREBUILD_PATCH_RETRIES:
+            print(f"[PATCH] apply 失败重试已达上限({_MAX_PREBUILD_PATCH_RETRIES})，回到 PLAN")
+            task.current_state = TaskState.PLAN
+            return task
+        if not task.rollback_hint:
+            task.rollback_hint = "generate"
+        task.current_state = TaskState.PATCH
+        return task
+
+    if next_state == TaskState.PLAN:
+        task.current_state = TaskState.PLAN
+        return task
+
+    task.current_state = TaskState.DEBUG
+    return task
+
+
+# ---------------------------------------------------------------------------
+# Experimental: Tool-use driven PATCH entrypoint (not yet wired by default)
+# ---------------------------------------------------------------------------
+
+
+def run_patch_with_tools(task: TaskContext) -> PatchArtifact:
+    """Experimental PATCH implementation backed by the tool-use loop.
+
+    当前版本仅构建 prompt + tools 并运行一次工具循环，将最终结果视为
+    generate_plan，并复用 apply_patch 落地。尚未接入状态机，由上层在
+    试验阶段显式调用，用于对比传统 run_patch_stage 的行为。
+    """
+
+    planning_bundle = _build_planning_bundle(task)
+    analysis_json = planning_bundle.get("analysis_json", {})
+    repository_knowledge_entry = _load_repository_knowledge_entry(task)
+
+    from .context_builder import ContextBuilder, PatchContext
+
+    ctx_builder = ContextBuilder(task, kb=None)
+    patch_ctx = PatchContext(
+        symbol=task.target.symbol,
+        analysis_json=analysis_json,
+        target_files=planning_bundle.get("target_files", {}),
+        repository_knowledge_entry=repository_knowledge_entry,
+        existing_files_map=None,
+        build_errors=None,
+        debug_suggestions=None,
+        previous_code=None,
+        kb_errors=None,
+        validation_feedback=None,
+    )
+
+    tools = _build_patch_tools(task)
+
+    messages = [
+        LlmMessage(role="system", content=system_prompt()),
+        LlmMessage(
+            role="user",
+            content=(
+                "你现在处于 PATCH 阶段，可以通过 JSON 调用工具来完成迁移。\n"
+                "请遵循以下协议：\n\n"
+                "1. 如需调用工具，请严格输出：\n"
+                "   {\"tool_call\": {\"name\": \"<tool_name>\", \"arguments\": { ... }}}\n"
+                "2. 完成全部修改后，请输出：\n"
+                "   {\"final\": {\"generate_plan\": {\"patches\": [ ... ]}}}\n\n"
+                "下面是当前 PATCH 上下文：\n\n" + patch_generate_prompt(patch_ctx)
+            ),
+        ),
+    ]
+
+    _, final_result = run_tool_use_loop(
+        task.cfg.llm,
+        messages,
+        tools,
+        max_rounds=6,
+        max_tokens=2600,
+        timeout_seconds=180.0,
+        stage="patch_tools",
+    )
+
+    gen_plan: dict
+    if isinstance(final_result, dict) and isinstance(final_result.get("final"), dict):
+        inner = final_result["final"]
+        if isinstance(inner.get("generate_plan"), dict):
+            gen_plan = _normalize_generate_plan(inner)
+        else:
+            gen_plan = _normalize_generate_plan(inner)
+    elif isinstance(final_result, dict):
+        gen_plan = _normalize_generate_plan(final_result)
+    else:
+        # 回退：让模型自然语言输出再走一次普通 generate_code
+        record_trajectory_action("patch_tools", "fallback_to_generate_code")
+        gen_plan = generate_code(task, planning_bundle=planning_bundle)
+
+    ok_generate, generate_issues = _validate_generate_plan(gen_plan, planning_bundle.get("analysis_json", {}))
+    record_trajectory_action("patch_validate", f"tools_generate_ok={ok_generate}; issues={generate_issues}")
+
+    artifact = apply_patch(task, gen_plan)
+    aid = task.save_artifact("PATCH", artifact, sub_id=task.target.symbol)
+    task.artifacts.patch_ids.append(aid)
+    return artifact
+
+
+def run_patch_stage_tools(task: TaskContext, kb_patterns: list[dict] | None = None) -> TaskContext:  # noqa: ARG001
+    """Alternate PATCH handler that delegates generation to tool-use.
+
+    生成与应用逻辑由 ``run_patch_with_tools`` 完成，这里只负责根据
+    PatchArtifact 的结果更新状态机，与传统 run_patch_stage 的尾部逻辑保持一致。
+    """
+
+    artifact = run_patch_with_tools(task)
+
+    if artifact.success:
+        for ap in artifact.applied_paths:
+            print(f"  ✓ {ap}")
+        record_trajectory_action("patch_route_decision", "patch_apply_success_tools -> BUILD")
+        task.current_state = TaskState.BUILD
+        return task
+
+    print(f"  ✗ apply failed (tools): {artifact.error}")
+    next_state, route_reason = _route_apply_failure_with_llm(task, artifact)
+    record_trajectory_action(
+        "patch_route_decision",
+        f"patch_apply_fail_tools -> {next_state.value}, reason={route_reason}, error={artifact.error}",
     )
 
     if next_state == TaskState.PATCH:

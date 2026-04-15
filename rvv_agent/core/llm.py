@@ -7,9 +7,10 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from .config import LlmConfig
+from .util import extract_json_from_llm
 
 #TODO:按照之前patch、search部分，应该要添加llm的错误处理，特别是断线重连部分
 @dataclass(frozen=True)
@@ -465,6 +466,162 @@ def probe_llm(cfg: LlmConfig) -> dict[str, object]:
         status["probe_ok"] = False
         status["probe_error"] = str(e)
         return status
+
+
+# ---------------------------------------------------------------------------
+# Generic tool-use loop (ReAct-style over plain chat completions)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ToolSpec:
+    """Lightweight description of a callable tool for tool-use loops.
+
+    ``func`` 接收解析后的 ``arguments`` 字典，返回任意可 JSON 序列化的对象。
+
+    这里不直接绑定到底层 LLM 的原生 function-calling 协议，而是约定：
+    - LLM 通过普通文本输出一个 JSON，对应一次 tool 调用或最终结果；
+    - JSON 结构由上层 prompt 约定（见 ``_parse_tool_message`` 的约定）。
+    这样可以在任意兼容 /chat/completions 的服务上工作。
+    """
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+    func: Callable[[dict[str, Any]], Any]
+
+
+@dataclass
+class ToolCall:
+    name: str
+    arguments: dict[str, Any]
+
+
+def _parse_tool_message(raw: str) -> tuple[str, ToolCall | None, Any | None]:
+    """Parse a model reply into either a tool call or a final result.
+
+    约定的 JSON 结构（由上层 prompt 约束 LLM 输出）：
+
+    - 请求调用工具：
+      {"tool_call": {"name": "search_files", "arguments": {"pattern": "..."}}}
+
+    - 返回最终结果：
+      {"final": { ... 任意结果 ... }}
+
+    如果解析失败或没有匹配字段，则退化为 "final"，并把整体 JSON
+    或原始文本作为结果交给上层，由上层自行解释。
+    """
+
+    raw = (raw or "").strip()
+    if not raw:
+        return "final", None, None
+
+    try:
+        data = extract_json_from_llm(raw)
+    except Exception:
+        # 无法解析为 JSON 时，视为最终自然语言结果
+        return "final", None, raw
+
+    if not isinstance(data, dict):
+        return "final", None, data
+
+    tc = data.get("tool_call")
+    if isinstance(tc, dict):
+        name = str(tc.get("name", "")).strip()
+        args = tc.get("arguments") or tc.get("args") or {}
+        if not isinstance(args, dict):
+            args = {}
+        if name:
+            return "tool", ToolCall(name=name, arguments=args), None
+
+    # 显式 final 包装
+    if "final" in data:
+        return "final", None, data.get("final")
+
+    # 回退：把整个对象视为最终结果
+    return "final", None, data
+
+
+def run_tool_use_loop(
+    cfg: LlmConfig,
+    messages: list[LlmMessage],
+    tools: list[ToolSpec],
+    *,
+    max_rounds: int = 8,
+    max_tokens: int = 2048,
+    timeout_seconds: float = 120.0,
+    stage: str = "tools",
+) -> tuple[list[LlmMessage], Any | None]:
+    """Run a simple ReAct-style loop where the LLM can request tools.
+
+    - ``messages``: 现有对话历史（必须包含 system / user 上下文）。
+    - ``tools``: 可用工具列表，每个带有 name/description/parameters/func。
+    - LLM 每轮通过 JSON 描述要调用的工具或给出最终结果。
+
+    返回值为 (最终 messages, 最终结果)。最终结果通常是 JSON 对象，
+    但也可以是自然语言字符串（在无法解析 JSON 时）。
+    """
+
+    tool_map = {t.name: t for t in tools}
+    final_result: Any | None = None
+
+    for _ in range(max_rounds):
+        reply = chat_completion_with_retry(
+            cfg,
+            messages,
+            max_tokens=max_tokens,
+            timeout_seconds=timeout_seconds,
+            stage=stage,
+        )
+        messages.append(LlmMessage(role="assistant", content=reply))
+
+        kind, call, result = _parse_tool_message(reply)
+        if kind == "tool" and call is not None:
+            spec = tool_map.get(call.name)
+            if spec is None:
+                err_msg = f"Unknown tool: {call.name}"
+                record_trajectory_action(stage, f"tool_error: {err_msg}", event_type="action")
+                # 反馈给模型，让其自行修正工具名或参数
+                messages.append(
+                    LlmMessage(
+                        role="user",
+                        content=f"TOOL_ERROR: {err_msg}",
+                    )
+                )
+                continue
+
+            try:
+                tool_output = spec.func(call.arguments or {})
+                payload = json.dumps(
+                    {"tool_name": spec.name, "ok": True, "result": tool_output},
+                    ensure_ascii=False,
+                )
+            except Exception as e:  # noqa: BLE001
+                err_text = f"{type(e).__name__}: {e}"
+                payload = json.dumps(
+                    {"tool_name": spec.name, "ok": False, "error": err_text},
+                    ensure_ascii=False,
+                )
+
+            # 将工具执行结果作为新的 user 消息反馈给 LLM
+            messages.append(
+                LlmMessage(
+                    role="user",
+                    content=f"TOOL_RESULT: {payload}",
+                )
+            )
+            continue
+
+        # 没有 tool 调用 → 视为最终结果
+        if isinstance(result, dict):
+            final_result = result
+        elif result is not None:
+            final_result = result
+        else:
+            final_result = reply
+        break
+
+    return messages, final_result
 
     probe_timeout = float(os.getenv("RVV_AGENT_LLM_PROBE_TIMEOUT", "10"))
 

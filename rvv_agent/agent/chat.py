@@ -626,8 +626,8 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
 
 
 def handle_patch(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskContext:
-    """PATCH handler: delegates to the 4-step patch module."""
-    from .patch import run_patch_stage
+    """PATCH handler: delegates to classic or tool-use PATCH stage."""
+    from .patch import run_patch_stage, run_patch_stage_tools
 
     kb_patterns = None
     if kb:
@@ -656,6 +656,14 @@ def handle_patch(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskCont
             from dataclasses import asdict
             kb_patterns = [asdict(p) for p in found]
 
+    use_tools = False
+    try:
+        use_tools = bool(getattr(task.cfg, "features", None) and task.cfg.features.enable_tool_use_patch_loop)
+    except Exception:
+        use_tools = False
+
+    if use_tools:
+        return run_patch_stage_tools(task, kb_patterns=kb_patterns)
     return run_patch_stage(task, kb_patterns=kb_patterns)
 
 

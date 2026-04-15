@@ -110,7 +110,7 @@ def patch_generate_prompt(
                 prev_parts.append(f"### {tp}\n```\n{code[:3000]}\n```")
             if prev_parts:
                 fix_section += "\n## 上次生成的代码（有错误，需要修正）\n" + "\n".join(prev_parts) + "\n"
-        fix_section += "\n请根据以上错误信息修正代码，而��是从头重新生成。\n"
+        fix_section += "\n请根据以上错误信息修正代码，而不是从头重新生成。\n"
 
     validation_section = ""
     if validation_feedback:

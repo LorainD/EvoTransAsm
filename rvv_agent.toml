@@ -35,8 +35,14 @@ build_dir = "build"
 # configure_extra_args = ["--disable-everything"]
 
 [board]
-enabled = false
-user = ""
-host = ""
+enabled = true
+user = "musepi"
+host = "192.168.31.124"
 port = 22
 remote_dir = "workplace"
+
+# Experimental feature toggles
+[features]
+# 启用基于 tool-use 的 PATCH 循环（ReAct + tools），默认关闭。
+# 开启后，PATCH 阶段会使用 run_patch_with_tools + 工具调用替代旧的硬编码流程。
+enable_tool_use_patch_loop = true

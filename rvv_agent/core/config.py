@@ -64,12 +64,24 @@ class HumanConfig:
 
 
 @dataclass
+class FeaturesConfig:
+    """Feature toggles for experimental behaviours.
+
+    Currently used to switch between the classic PATCH implementation and
+    the new tool-use driven PATCH loop.
+    """
+
+    enable_tool_use_patch_loop: bool = False
+
+
+@dataclass
 class AppConfig:
     llm: LlmConfig = field(default_factory=LlmConfig)
     toolchain: ToolchainConfig = field(default_factory=ToolchainConfig)
     ffmpeg: FfmpegConfig = field(default_factory=FfmpegConfig)
     board: BoardConfig = field(default_factory=BoardConfig)
     human: HumanConfig = field(default_factory=HumanConfig)
+    features: FeaturesConfig = field(default_factory=FeaturesConfig)
 
 
 def is_board_enabled(cfg: "AppConfig") -> bool:
@@ -167,6 +179,12 @@ def load_config(path: Path | None) -> AppConfig:
             cfg.human.scp_password = str(hm.get("scp_password", cfg.human.scp_password))
             if "run_onboard_ok" in hm:
                 cfg.human.run_onboard_ok = bool(hm["run_onboard_ok"])
+
+        feat = raw.get("features", {})
+        if isinstance(feat, dict):
+            cfg.features.enable_tool_use_patch_loop = bool(
+                feat.get("enable_tool_use_patch_loop", cfg.features.enable_tool_use_patch_loop)
+            )
 
     if os.getenv("RVV_AGENT_FFMPEG_ROOT"):
         cfg.ffmpeg.root = Path(os.environ["RVV_AGENT_FFMPEG_ROOT"])
