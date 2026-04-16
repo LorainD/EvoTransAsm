@@ -16,6 +16,21 @@ base_url    = "https://chatbox.isrc.ac.cn/api/chat/completions"
 model       = "Qwen3.5-397B-A17B"
 api_key_env = "LLM_API_KEY"
 temperature = 1
+default_max_tokens = 4096
+
+[llm.stage_max_tokens]
+intent = 1024
+retrieve_alias = 1024
+retrieve = 2048
+repo_analyze_note = 2048
+func_discover = 2048
+analyze = 4096
+plan = 4096
+patch_apply_route = 4096
+patch_generate = 8192
+patch_tools = 8192
+debug = 4096
+chat = 2048
 
 [toolchain]
 cross_prefix = "riscv64-unknown-linux-gnu-"

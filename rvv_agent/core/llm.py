@@ -419,6 +419,31 @@ def _is_retryable_llm_error(error: LlmError) -> bool:
     return any(k in msg for k in retryable_keywords)
 
 
+def _resolve_stage_max_tokens(cfg: LlmConfig, stage: str, requested: int) -> int:
+    """Resolve max_tokens with global defaults and optional per-stage overrides.
+
+    Rule:
+    - Start from cfg.default_max_tokens.
+    - If cfg.stage_max_tokens has current stage, use that override.
+    - Final max_tokens is max(requested, configured) so legacy small constants
+      do not cap new global settings.
+    """
+    configured = int(getattr(cfg, "default_max_tokens", 2048) or 2048)
+    stage_cfg = getattr(cfg, "stage_max_tokens", {})
+    if isinstance(stage_cfg, dict):
+        try:
+            ov = int(stage_cfg.get(stage, configured))
+            if ov > 0:
+                configured = ov
+        except Exception:
+            pass
+
+    resolved = max(int(requested or 0), configured)
+    if resolved <= 0:
+        return 2048
+    return resolved
+
+
 def chat_completion_with_retry(
     cfg: LlmConfig,
     messages: list[LlmMessage],
@@ -435,13 +460,14 @@ def chat_completion_with_retry(
     """
     last_error: LlmError | None = None
     attempts = max(1, max_retries)
+    resolved_max_tokens = _resolve_stage_max_tokens(cfg, stage, max_tokens)
     for attempt in range(attempts):
         try:
             # Disable internal retry to avoid double-retry loops.
             return chat_completion(
                 cfg,
                 messages,
-                max_tokens=max_tokens,
+                max_tokens=resolved_max_tokens,
                 timeout_seconds=timeout_seconds,
                 stage=stage,
                 max_retries=0,

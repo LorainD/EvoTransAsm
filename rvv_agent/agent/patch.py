@@ -50,14 +50,48 @@ _snapshot = snapshot_file
 
 # Keep PATCH self-healing bounded when BUILD has not started yet.
 _MAX_PREBUILD_PATCH_RETRIES = 3
+_PATCH_HARNESS_CACHE: str | None = None
 
 
-def _save_pre_injection(apply_dir: Path, dst: Path) -> None:
+def _load_patch_harness_text() -> str:
+    """Load full patch_harness.md text without truncation for PATCH prompts."""
+    global _PATCH_HARNESS_CACHE
+    if _PATCH_HARNESS_CACHE is not None:
+        return _PATCH_HARNESS_CACHE
+
+    harness_path = Path(__file__).resolve().parents[2] / "patch_harness.md"
+    if not harness_path.exists():
+        raise FileNotFoundError(f"patch harness not found: {harness_path}")
+
+    text = harness_path.read_text(encoding="utf-8", errors="replace")
+    if not text.strip():
+        raise RuntimeError(f"patch harness is empty: {harness_path}")
+
+    _PATCH_HARNESS_CACHE = text
+    return _PATCH_HARNESS_CACHE
+
+
+def _patch_harness_system_message() -> LlmMessage:
+    """Build a strict system message carrying full patch harness content."""
+    text = _load_patch_harness_text()
+    return LlmMessage(
+        role="system",
+        content=(
+            "以下是 PATCH 阶段必须完整遵循的 patch_harness.md 全文。"
+            "不得省略、不得摘要、不得忽略其中约束。\n\n"
+            + text
+        ),
+    )
+
+
+def _save_pre_injection(apply_dir: Path, ffmpeg_root: Path, dst: Path) -> None:
     """Save the ORIGINAL content of dst before injection (for rollback)."""
     try:
         pre_dir = apply_dir / "pre_injection"
-        parts = dst.parts
-        rel = Path(*parts[-3:]) if len(parts) >= 3 else Path(dst.name)
+        try:
+            rel = dst.resolve().relative_to(ffmpeg_root.resolve())
+        except Exception:
+            rel = Path(dst.name)
         pre = pre_dir / rel
         ensure_dir(pre.parent)
         if dst.exists():
@@ -87,9 +121,9 @@ def _rollback_apply_dir(pre_dir: Path, ffmpeg_root: Path) -> int:
                 restored += 1
         else:
             original = pre_file.read_text(encoding="utf-8", errors="replace")
-            if dst.exists():
-                write_text(dst, original)
-                restored += 1
+            ensure_dir(dst.parent)
+            write_text(dst, original)
+            restored += 1
     return restored
 
 
@@ -115,7 +149,7 @@ def _rollback_previous_apply(task: TaskContext) -> None:
         print(f"[PATCH] 已回滚 {restored} 个文件到注入前状态")
 
 
-def rollback_all_applies(task: TaskContext) -> None:
+def rollback_all_applies(task: TaskContext) -> int:
     """Restore ALL files modified during this session to their pre-injection state.
 
     Called on final session failure to ensure ffmpeg workspace remains compilable.
@@ -129,7 +163,7 @@ def rollback_all_applies(task: TaskContext) -> None:
         reverse=True,
     )
     if not apply_dirs:
-        return
+        return 0
 
     total = 0
     for pre_dir in apply_dirs:
@@ -137,6 +171,7 @@ def rollback_all_applies(task: TaskContext) -> None:
 
     if total:
         print(f"[PATCH] session 失败，已将 ffmpeg 工作区回滚 {total} 个文件到本次侵入前状态")
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -606,6 +641,7 @@ def _route_apply_failure_with_llm(
 
         messages = [
             LlmMessage(role="system", content=system_prompt()),
+            _patch_harness_system_message(),
             LlmMessage(role="user", content=debug_classify_prompt(debug_ctx)),
         ]
         raw = chat_completion_with_retry(
@@ -729,6 +765,7 @@ def generate_code(task: TaskContext,
 
     messages = [
         LlmMessage(role="system", content=system_prompt()),
+        _patch_harness_system_message(),
         LlmMessage(role="user", content=patch_generate_prompt(patch_ctx)),
     ]
     try:
@@ -815,7 +852,7 @@ def apply_patch(task: TaskContext, generate_plan: dict) -> PatchArtifact:
             log = {"target_path": target_path, "action": action,
                    "applied_at": "dry_run", "success": True}
         else:
-            _save_pre_injection(apply_dir, dst)
+            _save_pre_injection(apply_dir, task.ffmpeg_root, dst)
             ensure_dir(dst.parent)
 
             if action == "replace" or action == "create":
@@ -1086,6 +1123,7 @@ def run_patch_with_tools(task: TaskContext) -> PatchArtifact:
 
     messages = [
         LlmMessage(role="system", content=system_prompt()),
+        _patch_harness_system_message(),
         LlmMessage(
             role="user",
             content=(

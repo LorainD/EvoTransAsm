@@ -1160,6 +1160,50 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
     return task
 
 
+def _quick_build_health_check(task: TaskContext) -> tuple[bool, str]:
+    """Best-effort quick build check after rollback."""
+    from ..tool.exec import run_configure, run_make_checkasm
+
+    ffmpeg_root = task.ffmpeg_root
+    build_dir = ffmpeg_root / task.cfg.ffmpeg.build_dir
+    ensure_dir(build_dir)
+
+    jobs = max(1, min(max(1, os.cpu_count() or 1), 2))
+
+    cfg_result = run_configure(task.cfg, ffmpeg_root, build_dir)
+    if cfg_result.returncode != 0:
+        return False, f"rollback_health: configure_rc={cfg_result.returncode}"
+
+    make_result = run_make_checkasm(task.cfg, build_dir, jobs)
+    return make_result.returncode == 0, (
+        f"rollback_health: configure_rc=0 checkasm_build_rc={make_result.returncode}"
+    )
+
+
+def _rollback_on_failure(task: TaskContext, reason: str) -> tuple[bool, str]:
+    """Rollback all apply snapshots and run a quick health check."""
+    from .patch import rollback_all_applies
+
+    restored = 0
+    try:
+        restored = rollback_all_applies(task)
+    except Exception as e:
+        return False, f"rollback_failed: {e}"
+
+    if restored > 0:
+        print(f"[TASK_UPDATE] 回滚触发({reason})，已恢复 {restored} 个文件，开始健康检查…")
+
+    try:
+        ok, summary = _quick_build_health_check(task)
+        if ok:
+            print(f"[TASK_UPDATE] 回滚后健康检查通过: {summary}")
+        else:
+            print(f"[TASK_UPDATE][WARN] 回滚后健康检查失败: {summary}")
+        return ok, summary
+    except Exception as e:
+        return False, f"rollback_health_exception: {e}"
+
+
 def handle_task_update(task: TaskContext) -> TaskContext:
     """TASK_UPDATE handler: finalize task lifecycle and persist summary."""
     if task.artifacts.build_run_ids:
@@ -1172,22 +1216,27 @@ def handle_task_update(task: TaskContext) -> TaskContext:
         build_ok = False
 
     test_ok = True
+    test_status = "not_required"
     if is_board_enabled(task.cfg):
         try:
             test_artifact = task.load_artifact("TEST")
-            test_ok = str(test_artifact.get("status", "") or "") in {"success", "completed", "skipped"}
+            test_status = str(test_artifact.get("status", "") or "missing")
+            # Strict policy: with board enabled, only explicit success keeps injected changes.
+            test_ok = test_status == "success"
         except Exception:
             test_ok = False
+            test_status = "missing"
 
     overall_ok = build_ok and test_ok
 
-    # On failure, roll back all workspace changes so ffmpeg stays compilable
+    rollback_triggered = False
+    rollback_health_check = True
+    rollback_health_summary = "not_needed"
+
+    # On failure, roll back all workspace changes so ffmpeg stays compilable.
     if not overall_ok:
-        try:
-            from .patch import rollback_all_applies
-            rollback_all_applies(task)
-        except Exception as e:
-            print(f"[TASK_UPDATE] 回滚失败: {e}")
+        rollback_triggered = True
+        rollback_health_check, rollback_health_summary = _rollback_on_failure(task, "task_update_failed")
 
     now_ts = datetime.now().isoformat(timespec="seconds")
     task.task.finished_at = now_ts
@@ -1195,8 +1244,12 @@ def handle_task_update(task: TaskContext) -> TaskContext:
     task.task.summary = {
         "build_success": build_ok,
         "test_success": test_ok,
+        "test_status": test_status,
         "debug_cycles": len(task.artifacts.debug_run_ids),
         "patch_count": len(task.artifacts.patch_ids),
+        "rollback_triggered": rollback_triggered,
+        "rollback_health_check": rollback_health_check,
+        "rollback_health_summary": rollback_health_summary,
     }
 
     artifact = TaskUpdateArtifact(
@@ -1323,6 +1376,18 @@ def run_chat(cfg: AppConfig) -> int:
             print_red(f"\n迁移过程出错: {e}")
             import traceback
             traceback.print_exc()
+            task.task.status = TaskStatus.FAILED
+            task.task.finished_at = datetime.now().isoformat(timespec="seconds")
+            try:
+                rollback_ok, rollback_summary = _rollback_on_failure(task, "state_machine_exception")
+                task.task.summary = {
+                    **(task.task.summary or {}),
+                    "rollback_triggered": True,
+                    "rollback_health_check": rollback_ok,
+                    "rollback_health_summary": rollback_summary,
+                }
+            except Exception as rollback_e:
+                print_yellow(f"异常兜底回滚失败: {rollback_e}")
 
         # Generate report
         try:

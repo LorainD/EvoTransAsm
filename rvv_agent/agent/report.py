@@ -258,7 +258,15 @@ def write_chat_report(task: "TaskContext") -> Path:
             build_ok = last.get("exitcode", -1) == 0 and str(last.get("error_type", "") or "") != "rvv_missing"
         except Exception:
             pass
-    md.append(f"## Result\n\n- build_success: {build_ok}\n- debug_cycles: {len(task.artifacts.debug_run_ids)}\n")
+    summary = task.task.summary or {}
+    md.append("## Result\n")
+    md.append(f"- build_success: {build_ok}")
+    md.append(f"- test_success: {summary.get('test_success', 'n/a')}")
+    md.append(f"- test_status: {summary.get('test_status', 'n/a')}")
+    md.append(f"- rollback_triggered: {summary.get('rollback_triggered', False)}")
+    md.append(f"- rollback_health_check: {summary.get('rollback_health_check', 'n/a')}")
+    md.append(f"- rollback_health_summary: {summary.get('rollback_health_summary', 'n/a')}")
+    md.append(f"- debug_cycles: {len(task.artifacts.debug_run_ids)}\n")
 
     report_path = run_dir / "report.md"
     write_text(report_path, "\n".join(md))

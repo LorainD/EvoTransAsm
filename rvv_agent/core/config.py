@@ -14,6 +14,10 @@ class LlmConfig:
     api_key_env: str = "LLM_API_KEY"
     model: str = "gpt-4o-mini"
     temperature: float = 0.2
+    # Global output-token budget for chat-completions calls.
+    default_max_tokens: int = 4096
+    # Optional per-stage overrides, e.g. {"patch_generate": 8192}.
+    stage_max_tokens: dict[str, int] = field(default_factory=dict)
     # Optional pricing for trajectory cost estimation ($/1M tokens).
     # If 0, uses built-in defaults for known models.
     cost_per_1m_input_tokens: float = 0.0
@@ -120,14 +124,32 @@ def _as_path(v: object) -> Path | None:
 
 
 def _load_llm_table(base: LlmConfig, table: dict[str, object]) -> LlmConfig:
+    stage_raw = table.get("stage_max_tokens", base.stage_max_tokens)
+    stage_cfg: dict[str, int] = {}
+    if isinstance(stage_raw, dict):
+        for k, v in stage_raw.items():
+            key = str(k).strip()
+            if not key:
+                continue
+            try:
+                iv = int(v)
+            except Exception:
+                continue
+            if iv > 0:
+                stage_cfg[key] = iv
+
     cfg = LlmConfig(
         base_url=str(table.get("base_url", base.base_url)).strip().rstrip("/"),
         api_key_env=str(table.get("api_key_env", base.api_key_env)).strip(),
         model=str(table.get("model", base.model)).strip(),
         temperature=float(table.get("temperature", base.temperature)),
+        default_max_tokens=int(table.get("default_max_tokens", base.default_max_tokens)),
+        stage_max_tokens=stage_cfg,
         cost_per_1m_input_tokens=float(table.get("cost_per_1m_input_tokens", base.cost_per_1m_input_tokens)),
         cost_per_1m_output_tokens=float(table.get("cost_per_1m_output_tokens", base.cost_per_1m_output_tokens)),
     )
+    if cfg.default_max_tokens <= 0:
+        cfg.default_max_tokens = base.default_max_tokens
     return cfg
 
 
