@@ -259,12 +259,21 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
         phase = str(test_artifact.get("phase", "") or "run")
         run_rc = test_artifact.get("run_rc", "n/a")
         scp_rc = test_artifact.get("scp_rc", "n/a")
-        test_out = str(test_artifact.get("run_stdout", "") or test_artifact.get("scp_stdout", ""))
-        test_err = str(test_artifact.get("run_stderr", "") or test_artifact.get("scp_stderr", ""))
+        prepare_rc = test_artifact.get("prepare_rc", "n/a")
+        test_out = str(
+            test_artifact.get("run_stdout", "")
+            or test_artifact.get("scp_stdout", "")
+            or test_artifact.get("prepare_stdout", "")
+        )
+        test_err = str(
+            test_artifact.get("run_stderr", "")
+            or test_artifact.get("scp_stderr", "")
+            or test_artifact.get("prepare_stderr", "")
+        )
         root_cause = f"test_failure:{phase}:{test_reason}"
         extracted = extract_build_errors(test_out + "\n" + test_err)
         error_text = (
-            f"Board test failed: phase={phase}, reason={test_reason}, run_rc={run_rc}, scp_rc={scp_rc}\n"
+            f"Board test failed: phase={phase}, reason={test_reason}, run_rc={run_rc}, scp_rc={scp_rc}, prepare_rc={prepare_rc}\n"
             f"{extracted}"
         ).strip()
 

@@ -8,11 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..core.config import AppConfig
-from ..core.util import CmdResult, run_cmd
+from ..core.util import CmdResult, now_id, run_cmd
 
 
 @dataclass(frozen=True)
 class BoardCommands:
+    remote_work_dir: str
+    ssh_prepare_argv: list[str]
     scp_argv: list[str]
     ssh_run_argv: list[str]
 
@@ -50,20 +52,32 @@ def local_checkasm_path(ffmpeg_root: Path, build_dir_name: str) -> Path:
 
 def build_board_commands(cfg: AppConfig, ffmpeg_root: Path, module: str) -> BoardCommands:
     local_bin = local_checkasm_path(ffmpeg_root, str(cfg.ffmpeg.build_dir))
-    remote = f"{cfg.board.user}@{cfg.board.host}:{cfg.board.remote_dir}/checkasm"
+    ssh_target = f"{cfg.board.user}@{cfg.board.host}"
 
+    base_remote_dir = cfg.board.remote_dir.strip().rstrip("/") or "workplace"
+    remote_work_dir = f"{base_remote_dir}/{now_id()}"
+    remote_work_dir_quoted = shlex.quote(remote_work_dir)
+    remote = f"{cfg.board.user}@{cfg.board.host}:{remote_work_dir}/checkasm"
+
+    ssh_prepare_argv = [
+        "ssh", "-p", str(cfg.board.port), ssh_target,
+        f"mkdir -p {remote_work_dir_quoted}",
+    ]
     scp_argv = [
         "scp", "-P", str(cfg.board.port), str(local_bin), remote,
     ]
-    ssh_target = f"{cfg.board.user}@{cfg.board.host}"
-    remote_dir_quoted = shlex.quote(cfg.board.remote_dir)
     module = module.strip()
     test_arg = f" --test={shlex.quote(module)}" if module else ""
     ssh_run_argv = [
         "ssh", "-p", str(cfg.board.port), ssh_target,
-        f"cd {remote_dir_quoted} && chmod +x checkasm && ./checkasm{test_arg}",
+        f"cd {remote_work_dir_quoted} && chmod +x checkasm && ./checkasm{test_arg}",
     ]
-    return BoardCommands(scp_argv=scp_argv, ssh_run_argv=ssh_run_argv)
+    return BoardCommands(
+        remote_work_dir=remote_work_dir,
+        ssh_prepare_argv=ssh_prepare_argv,
+        scp_argv=scp_argv,
+        ssh_run_argv=ssh_run_argv,
+    )
 
 
 def run_with_sshpass(argv: list[str], password: str, *, timeout_sec: int | None = None) -> CmdResult:
@@ -94,6 +108,16 @@ def analyze_checkasm_output(stdout: str, stderr: str, returncode: int) -> Checka
         return CheckasmResult(success=False, reason="checkasm_runtime_failure")
 
     return CheckasmResult(success=True, reason="ok")
+
+
+def is_infra_failure(reason: str) -> bool:
+    """Return True for board connectivity/auth issues instead of checkasm mismatch."""
+    if reason == "checkasm_timeout":
+        return True
+    if reason.startswith("checkasm_nonzero_exit:"):
+        suffix = reason.split(":", 1)[1].strip()
+        return suffix in {"255", "127"}
+    return False
 
 
 def llm_analyze_checkasm_failure(cfg: AppConfig, context: dict) -> CheckasmLlmAnalysis:

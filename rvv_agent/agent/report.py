@@ -210,6 +210,46 @@ def write_chat_report(task: "TaskContext") -> Path:
         except Exception:
             pass
 
+    # Test
+    try:
+        test = task.load_artifact("TEST")
+        status = str(test.get("status", "") or "unknown")
+        phase = str(test.get("phase", "") or "")
+        reason = str(test.get("run_reason", "") or test.get("reason", ""))
+        md.append(f"## Test (status={status})\n")
+        if phase:
+            md.append(f"- phase: {phase}")
+        if reason:
+            md.append(f"- reason: {reason}")
+        md.append(f"- remote_dir: {test.get('remote_dir', '')}")
+        md.append(f"- prepare_rc: {test.get('prepare_rc', 'n/a')}")
+        md.append(f"- scp_rc: {test.get('scp_rc', 'n/a')}")
+        md.append(f"- run_rc: {test.get('run_rc', 'n/a')}")
+
+        prepare_out = str(test.get("prepare_stdout", "") or "")
+        prepare_err = str(test.get("prepare_stderr", "") or "")
+        scp_out = str(test.get("scp_stdout", "") or "")
+        scp_err = str(test.get("scp_stderr", "") or "")
+        run_out = str(test.get("run_stdout", "") or "")
+        run_err = str(test.get("run_stderr", "") or "")
+
+        if prepare_out:
+            md.append(f"\n### prepare stdout (tail)\n\n```\n{prepare_out[-3000:]}\n```\n")
+        if prepare_err:
+            md.append(f"\n### prepare stderr (tail)\n\n```\n{prepare_err[-3000:]}\n```\n")
+        if scp_out:
+            md.append(f"\n### scp stdout (tail)\n\n```\n{scp_out[-3000:]}\n```\n")
+        if scp_err:
+            md.append(f"\n### scp stderr (tail)\n\n```\n{scp_err[-3000:]}\n```\n")
+        if run_out:
+            md.append(f"\n### run stdout (tail)\n\n```\n{run_out[-3000:]}\n```\n")
+        if run_err:
+            md.append(f"\n### run stderr (tail)\n\n```\n{run_err[-3000:]}\n```\n")
+
+        md.append("")
+    except Exception:
+        pass
+
     # Final status
     build_ok = False
     if task.artifacts.build_run_ids:

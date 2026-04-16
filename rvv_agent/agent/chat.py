@@ -823,6 +823,7 @@ def handle_test(task: TaskContext) -> TaskContext:
     from ..tool.board import (
         analyze_checkasm_output,
         build_board_commands,
+        is_infra_failure,
         local_checkasm_candidates,
         local_checkasm_path,
         run_with_sshpass,
@@ -881,18 +882,48 @@ def handle_test(task: TaskContext) -> TaskContext:
         task.current_state = TaskState.DEBUG
         return task
 
+    print("\n将在测试板创建本轮目录后再上传 checkasm：")
+    print("- " + fmt_argv(cmds.ssh_prepare_argv))
+    print("- " + fmt_argv(cmds.scp_argv))
+
     scp_ok = task.cfg.human.scp_ok
     if scp_ok is None:
-        print("\n将把 checkasm scp 到测试板：")
-        print("- " + fmt_argv(cmds.scp_argv))
         scp_ok = prompt_yes_no("是否现在执行 scp？", default=True)
         task.cfg.human.scp_ok = scp_ok
 
     password = task.cfg.human.scp_password or ""
+    prepare_rc: int | None = None
+    prepare_stdout = ""
+    prepare_stderr = ""
     scp_rc: int | None = None
     scp_stdout = ""
     scp_stderr = ""
     if scp_ok:
+        res_prepare = run_with_sshpass(cmds.ssh_prepare_argv, password)
+        prepare_rc = res_prepare.returncode
+        prepare_stdout = res_prepare.stdout
+        prepare_stderr = res_prepare.stderr
+        write_text(task.run_dir / "board_prepare_stdout.txt", res_prepare.stdout)
+        write_text(task.run_dir / "board_prepare_stderr.txt", res_prepare.stderr)
+        if res_prepare.returncode != 0:
+            print(f"\n板端目录创建失败 (rc={res_prepare.returncode})")
+            task.save_artifact("TEST", {
+                "test_id": test_id,
+                "status": "failed",
+                "phase": "prepare",
+                "module": module,
+                "local_path": str(local_bin),
+                "remote_dir": cmds.remote_work_dir,
+                "prepare_rc": res_prepare.returncode,
+                "prepare_stdout": prepare_stdout,
+                "prepare_stderr": prepare_stderr,
+            })
+            task.all_build_errors.append(
+                f"board_test_error: remote prepare failed (rc={res_prepare.returncode})\n{prepare_stdout}\n{prepare_stderr}"
+            )
+            task.current_state = TaskState.DEBUG
+            return task
+
         res_scp = run_with_sshpass(cmds.scp_argv, password)
         scp_rc = res_scp.returncode
         scp_stdout = res_scp.stdout
@@ -907,7 +938,10 @@ def handle_test(task: TaskContext) -> TaskContext:
                 "phase": "scp",
                 "module": module,
                 "local_path": str(local_bin),
-                "remote_dir": task.cfg.board.remote_dir,
+                "remote_dir": cmds.remote_work_dir,
+                "prepare_rc": prepare_rc,
+                "prepare_stdout": prepare_stdout,
+                "prepare_stderr": prepare_stderr,
                 "scp_rc": res_scp.returncode,
                 "scp_stdout": scp_stdout,
                 "scp_stderr": scp_stderr,
@@ -947,9 +981,12 @@ def handle_test(task: TaskContext) -> TaskContext:
                 "phase": "run",
                 "module": module,
                 "local_path": str(local_bin),
-                "remote_dir": task.cfg.board.remote_dir,
+                "remote_dir": cmds.remote_work_dir,
                 "scp_ok": scp_ok,
                 "run_ok": run_ok,
+                "prepare_rc": prepare_rc,
+                "prepare_stdout": prepare_stdout,
+                "prepare_stderr": prepare_stderr,
                 "scp_rc": scp_rc,
                 "run_rc": res_run.returncode,
                 "run_reason": run_eval.reason,
@@ -961,7 +998,11 @@ def handle_test(task: TaskContext) -> TaskContext:
                 f"board_test_error: run failed (reason={run_eval.reason}, rc={res_run.returncode})\n"
                 f"{run_stdout}\n{run_stderr}"
             )
-            task.current_state = TaskState.DEBUG
+            if is_infra_failure(run_eval.reason):
+                print("[TEST] 检测到板端连通/认证类失败，转入 DEBUG 让 LLM 进行诊断并保留审阅证据。")
+                task.current_state = TaskState.DEBUG
+            else:
+                task.current_state = TaskState.DEBUG
             return task
 
     task.save_artifact("TEST", {
@@ -969,9 +1010,12 @@ def handle_test(task: TaskContext) -> TaskContext:
         "status": "success",
         "module": module,
         "local_path": str(local_bin),
-        "remote_dir": task.cfg.board.remote_dir,
+        "remote_dir": cmds.remote_work_dir,
         "scp_ok": scp_ok,
         "run_ok": run_ok,
+        "prepare_rc": prepare_rc,
+        "prepare_stdout": prepare_stdout,
+        "prepare_stderr": prepare_stderr,
         "scp_rc": scp_rc,
         "run_rc": run_rc,
         "scp_stdout": scp_stdout,
@@ -1080,14 +1124,15 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
     for err_text in task.all_build_errors:
         from .debug import classify_error
         err_class = classify_error(err_text)
+        err_class_name = str(getattr(err_class, "value", err_class))
         record = ErrorRecord(
-            error_class=err_class.value,
+            error_class=err_class_name,
             pattern=err_text[:200],
             fix_strategy="auto-fixed during migration",
             example=err_text[:500],
         )
         kb.add_error(record)
-        new_errors.append({"error_class": err_class.value, "pattern": err_text[:200]})
+        new_errors.append({"error_class": err_class_name, "pattern": err_text[:200]})
 
     artifact = KBUpdateArtifact(
         new_patterns=[{"pattern_id": new_pattern.pattern_id, "symbol": symbol}],
