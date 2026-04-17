@@ -72,54 +72,6 @@ def _load_patch_harness_text() -> str:
         return _PATCH_HARNESS_CACHE
 
     harness_path = Path(__file__).resolve().parents[2] / "patch_harness.md"
-
-def rollback_group_applies(task: TaskContext, group_id: str) -> int:
-    """Rollback apply snapshots that belong to a specific group.
-
-    For historical PATCH artifacts without group_id, fallback to rolling back the
-    most recent apply once to reduce cross-group blast radius.
-    """
-    if not group_id:
-        return 0
-
-    sub_ids: list[str] = []
-    for pid in task.artifacts.patch_ids:
-        sub = pid.split("/", 1)[1] if "/" in pid else pid
-        if sub:
-            sub_ids.append(sub)
-
-    if not sub_ids:
-        return 0
-
-    restored = 0
-    has_legacy = False
-    for sub in reversed(sub_ids):
-        try:
-            patch_art = task.load_artifact("PATCH", sub_id=sub)
-        except Exception:
-            continue
-        patch_group = str(patch_art.get("group_id", "") or "")
-        patch_id = str(patch_art.get("patch_id", "") or "")
-        if not patch_id:
-            continue
-        if not patch_group:
-            has_legacy = True
-            continue
-        if patch_group != group_id:
-            continue
-
-        pre_dir = task.run_dir / f"apply_{patch_id}" / "pre_injection"
-        if pre_dir.exists():
-            restored += _rollback_apply_dir(pre_dir, task.ffmpeg_root)
-
-    if restored:
-        print(f"[PATCH] 已按 group 回滚 {restored} 个文件 (group_id={group_id})")
-        return restored
-
-    if has_legacy:
-        print("[PATCH][WARN] 检测到旧版 PATCH artifact 缺少 group_id，降级为回滚最近一次 apply")
-        _rollback_previous_apply(task)
-    return restored
     if not harness_path.exists():
         raise FileNotFoundError(f"patch harness not found: {harness_path}")
 
@@ -232,6 +184,55 @@ def rollback_all_applies(task: TaskContext) -> int:
     if total:
         print(f"[PATCH] session 失败，已将 ffmpeg 工作区回滚 {total} 个文件到本次侵入前状态")
     return total
+
+
+def rollback_group_applies(task: TaskContext, group_id: str) -> int:
+    """Rollback apply snapshots that belong to a specific group.
+
+    For historical PATCH artifacts without group_id, fallback to rolling back the
+    most recent apply once to reduce cross-group blast radius.
+    """
+    if not group_id:
+        return 0
+
+    sub_ids: list[str] = []
+    for pid in task.artifacts.patch_ids:
+        sub = pid.split("/", 1)[1] if "/" in pid else pid
+        if sub:
+            sub_ids.append(sub)
+
+    if not sub_ids:
+        return 0
+
+    restored = 0
+    has_legacy = False
+    for sub in reversed(sub_ids):
+        try:
+            patch_art = task.load_artifact("PATCH", sub_id=sub)
+        except Exception:
+            continue
+        patch_group = str(patch_art.get("group_id", "") or "")
+        patch_id = str(patch_art.get("patch_id", "") or "")
+        if not patch_id:
+            continue
+        if not patch_group:
+            has_legacy = True
+            continue
+        if patch_group != group_id:
+            continue
+
+        pre_dir = task.run_dir / f"apply_{patch_id}" / "pre_injection"
+        if pre_dir.exists():
+            restored += _rollback_apply_dir(pre_dir, task.ffmpeg_root)
+
+    if restored:
+        print(f"[PATCH] 已按 group 回滚 {restored} 个文件 (group_id={group_id})")
+        return restored
+
+    if has_legacy:
+        print("[PATCH][WARN] 检测到旧版 PATCH artifact 缺少 group_id，降级为回滚最近一次 apply")
+        _rollback_previous_apply(task)
+    return restored
 
 
 # ---------------------------------------------------------------------------
