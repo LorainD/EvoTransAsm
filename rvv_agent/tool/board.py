@@ -14,6 +14,8 @@ from ..core.util import CmdResult, now_id, run_cmd
 @dataclass(frozen=True)
 class BoardCommands:
     remote_work_dir: str
+    test_name: str
+    test_source: str
     ssh_prepare_argv: list[str]
     scp_argv: list[str]
     ssh_run_argv: list[str]
@@ -50,7 +52,75 @@ def local_checkasm_path(ffmpeg_root: Path, build_dir_name: str) -> Path:
     return candidates[0]
 
 
-def build_board_commands(cfg: AppConfig, ffmpeg_root: Path, module: str) -> BoardCommands:
+def _module_hint_name(module: str) -> str:
+    """Normalize module input to a likely checkasm --test token."""
+    s = (module or "").strip().strip("/")
+    if not s:
+        return ""
+    if "/" in s:
+        s = s.split("/")[-1]
+    if s.endswith(".c"):
+        s = s[:-2]
+    return s
+
+
+def _parse_checkasm_name_from_content(content: str) -> str:
+    """Extract test name from checkasm source content.
+
+    Example:
+      void checkasm_check_synth_filter(void) -> synth_filter
+    """
+    m = re.search(r"\bcheckasm_check_([A-Za-z0-9_]+)\s*\(", content)
+    return m.group(1) if m else ""
+
+
+def resolve_checkasm_test_name(
+    ffmpeg_root: Path,
+    checkasm_file_paths: list[str] | None,
+    fallback_module: str,
+) -> tuple[str, str]:
+    """Resolve real checkasm --test name from checkasm source files.
+
+    Returns:
+      (test_name, source_path)
+      source_path 为 "fallback" 表示未解析成功而使用兜底值。
+    """
+    fallback = _module_hint_name(fallback_module)
+    candidates = [str(p).strip() for p in (checkasm_file_paths or []) if str(p).strip()]
+    if not candidates:
+        return fallback, "fallback"
+
+    # Prefer paths with tests/checkasm and whose filename is close to module hint.
+    hint = fallback.lower()
+
+    def _score(rel: str) -> tuple[int, int]:
+        low = rel.lower().replace("\\", "/")
+        in_checkasm = 1 if "tests/checkasm" in low else 0
+        name_match = 1 if hint and hint in Path(low).name else 0
+        return (in_checkasm, name_match)
+
+    ordered = sorted(candidates, key=_score, reverse=True)
+    for rel in ordered:
+        full = ffmpeg_root / rel
+        if not full.exists() or not full.is_file():
+            continue
+        try:
+            content = full.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        name = _parse_checkasm_name_from_content(content)
+        if name:
+            return name, rel
+
+    return fallback, "fallback"
+
+
+def build_board_commands(
+    cfg: AppConfig,
+    ffmpeg_root: Path,
+    module: str,
+    checkasm_file_paths: list[str] | None = None,
+) -> BoardCommands:
     local_bin = local_checkasm_path(ffmpeg_root, str(cfg.ffmpeg.build_dir))
     ssh_target = f"{cfg.board.user}@{cfg.board.host}"
 
@@ -66,14 +136,16 @@ def build_board_commands(cfg: AppConfig, ffmpeg_root: Path, module: str) -> Boar
     scp_argv = [
         "scp", "-P", str(cfg.board.port), str(local_bin), remote,
     ]
-    module = module.strip()
-    test_arg = f" --test={shlex.quote(module)}" if module else ""
+    test_name, test_source = resolve_checkasm_test_name(ffmpeg_root, checkasm_file_paths, module)
+    test_arg = f" --test={shlex.quote(test_name)}" if test_name else ""
     ssh_run_argv = [
         "ssh", "-p", str(cfg.board.port), ssh_target,
         f"cd {remote_work_dir_quoted} && chmod +x checkasm && ./checkasm{test_arg}",
     ]
     return BoardCommands(
         remote_work_dir=remote_work_dir,
+        test_name=test_name,
+        test_source=test_source,
         ssh_prepare_argv=ssh_prepare_argv,
         scp_argv=scp_argv,
         ssh_run_argv=ssh_run_argv,
@@ -107,7 +179,19 @@ def analyze_checkasm_output(stdout: str, stderr: str, returncode: int) -> Checka
     if "mismatch" in combined or "segmentation fault" in combined or "sigsegv" in combined:
         return CheckasmResult(success=False, reason="checkasm_runtime_failure")
 
-    return CheckasmResult(success=True, reason="ok")
+    # 关键防线："all 0 tests passed" 并不代表真正跑到了目标测试。
+    if re.search(r"checkasm:\s*all\s*0\s*tests\s*passed", combined) or "no tests to perform" in combined:
+        return CheckasmResult(success=False, reason="zero_tests_executed")
+
+    # 正向语义：必须看到明确的非零测试通过，或常见 OK 标记。
+    if re.search(r"checkasm:\s*all\s*[1-9][0-9]*\s*tests\s*passed", combined):
+        return CheckasmResult(success=True, reason="ok")
+
+    if re.search(r"\bcheckasm\b.*\bok\b", combined):
+        return CheckasmResult(success=True, reason="ok")
+
+    # 非零 rc 之外的未知输出也按失败处理，避免假阳性。
+    return CheckasmResult(success=False, reason="unrecognized_test_output")
 
 
 def is_infra_failure(reason: str) -> bool:

@@ -274,6 +274,18 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
             f"{extracted}"
         ).strip()
 
+        if test_reason == "zero_tests_executed":
+            injected_debug_hint = (
+                "\n\n【严重警告：测试假阳性】\n"
+                "checkasm 返回了成功退出码，但实际执行了 0 个测试（all 0 tests passed / no tests to perform）。\n"
+                "这说明 RVV 路径大概率没有被触发。请优先排查：\n"
+                "1. Makefile/构建系统是否正确加入 RVV 目标文件并完成链接；\n"
+                "2. 对应 *_init.c 是否正确完成函数指针注册到 RVV 实现；\n"
+                "3. CPU flag/条件分支（如 AV_CPU_FLAG_RVV_*）是否命中。\n"
+                "请先修复初始化注册与链接问题，不要优先改汇编算术逻辑。"
+            )
+            error_text = (error_text + injected_debug_hint).strip()
+
     if not error_text.strip():
         if root_cause == "rvv_missing":
             error_text = (

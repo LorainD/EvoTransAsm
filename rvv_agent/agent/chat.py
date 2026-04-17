@@ -850,6 +850,26 @@ def handle_test(task: TaskContext) -> TaskContext:
 
     test_id = now_id()
     module = task.target.module.strip()
+    checkasm_sources: list[str] = []
+    try:
+        search_art = task.load_artifact("SEARCH_FILE")
+        if isinstance(search_art, dict):
+            selected_json = search_art.get("selected_json", {})
+            if isinstance(selected_json, dict):
+                v = selected_json.get("checkasm", [])
+                if isinstance(v, list):
+                    checkasm_sources = [str(x).strip() for x in v if str(x).strip()]
+            if not checkasm_sources:
+                selected_files = search_art.get("selected_files", [])
+                if isinstance(selected_files, list):
+                    checkasm_sources = [
+                        str(x).strip()
+                        for x in selected_files
+                        if str(x).strip().replace("\\", "/").startswith("tests/checkasm/")
+                        and str(x).strip().endswith(".c")
+                    ]
+    except Exception:
+        checkasm_sources = []
 
     # Use centralised helper instead of the raw boolean flag so that
     # board tests are not accidentally skipped when connection
@@ -878,9 +898,15 @@ def handle_test(task: TaskContext) -> TaskContext:
         task.current_state = TaskState.KB_UPDATE
         return task
 
-    cmds = build_board_commands(task.cfg, task.ffmpeg_root, module)
+    cmds = build_board_commands(task.cfg, task.ffmpeg_root, module, checkasm_sources)
     local_bin = local_checkasm_path(task.ffmpeg_root, str(task.cfg.ffmpeg.build_dir))
     checked_paths = [str(p) for p in local_checkasm_candidates(task.ffmpeg_root, str(task.cfg.ffmpeg.build_dir))]
+
+    print(f"\ncheckasm 测试目标: --test={cmds.test_name or module}")
+    if cmds.test_source and cmds.test_source != "fallback":
+        print(f"测试名来源: {cmds.test_source}")
+    else:
+        print("测试名来源: fallback(module)")
 
     if not local_bin.exists():
         print("\n本地 checkasm 不存在，无法执行板端测试。")
@@ -892,6 +918,8 @@ def handle_test(task: TaskContext) -> TaskContext:
             "reason": "local_checkasm_missing",
             "checked_paths": checked_paths,
             "module": module,
+            "test_name": cmds.test_name,
+            "test_name_source": cmds.test_source,
         })
         task.all_build_errors.append(
             "board_test_error: local checkasm not found; checked paths:\n" + "\n".join(checked_paths)
@@ -929,6 +957,8 @@ def handle_test(task: TaskContext) -> TaskContext:
                 "status": "failed",
                 "phase": "prepare",
                 "module": module,
+                "test_name": cmds.test_name,
+                "test_name_source": cmds.test_source,
                 "local_path": str(local_bin),
                 "remote_dir": cmds.remote_work_dir,
                 "prepare_rc": res_prepare.returncode,
@@ -954,6 +984,8 @@ def handle_test(task: TaskContext) -> TaskContext:
                 "status": "failed",
                 "phase": "scp",
                 "module": module,
+                "test_name": cmds.test_name,
+                "test_name_source": cmds.test_source,
                 "local_path": str(local_bin),
                 "remote_dir": cmds.remote_work_dir,
                 "prepare_rc": prepare_rc,
@@ -997,6 +1029,8 @@ def handle_test(task: TaskContext) -> TaskContext:
                 "status": "failed",
                 "phase": "run",
                 "module": module,
+                "test_name": cmds.test_name,
+                "test_name_source": cmds.test_source,
                 "local_path": str(local_bin),
                 "remote_dir": cmds.remote_work_dir,
                 "scp_ok": scp_ok,
@@ -1026,6 +1060,8 @@ def handle_test(task: TaskContext) -> TaskContext:
         "test_id": test_id,
         "status": "success",
         "module": module,
+        "test_name": cmds.test_name,
+        "test_name_source": cmds.test_source,
         "local_path": str(local_bin),
         "remote_dir": cmds.remote_work_dir,
         "scp_ok": scp_ok,
