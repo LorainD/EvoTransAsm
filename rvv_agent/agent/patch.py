@@ -31,11 +31,23 @@ from ..core.task import (
     PatchArtifact,
     TaskContext,
     TaskState,
+    load_plan_artifact,
 )
 from ..core.util import ensure_dir, now_id, write_json, write_text, extract_build_errors, fmt_argv
 from ..tool.interactive import prompt_yes_no
 from ..tool.exec import run_configure, run_make_checkasm, configure_argv, make_checkasm_argv
 
+
+def _current_group_id(task: TaskContext) -> str:
+    """Best-effort current group id from PLAN artifact."""
+    try:
+        plan = load_plan_artifact(task.load_artifact("PLAN"))
+    except Exception:
+        return ""
+    idx = int(plan.current_group_idx)
+    if idx < 0 or idx >= len(plan.groups):
+        return ""
+    return plan.groups[idx].group_id or ""
 
 # ---------------------------------------------------------------------------
 # Shared helpers (re-exported from generate.py / inject.py)
@@ -60,6 +72,54 @@ def _load_patch_harness_text() -> str:
         return _PATCH_HARNESS_CACHE
 
     harness_path = Path(__file__).resolve().parents[2] / "patch_harness.md"
+
+def rollback_group_applies(task: TaskContext, group_id: str) -> int:
+    """Rollback apply snapshots that belong to a specific group.
+
+    For historical PATCH artifacts without group_id, fallback to rolling back the
+    most recent apply once to reduce cross-group blast radius.
+    """
+    if not group_id:
+        return 0
+
+    sub_ids: list[str] = []
+    for pid in task.artifacts.patch_ids:
+        sub = pid.split("/", 1)[1] if "/" in pid else pid
+        if sub:
+            sub_ids.append(sub)
+
+    if not sub_ids:
+        return 0
+
+    restored = 0
+    has_legacy = False
+    for sub in reversed(sub_ids):
+        try:
+            patch_art = task.load_artifact("PATCH", sub_id=sub)
+        except Exception:
+            continue
+        patch_group = str(patch_art.get("group_id", "") or "")
+        patch_id = str(patch_art.get("patch_id", "") or "")
+        if not patch_id:
+            continue
+        if not patch_group:
+            has_legacy = True
+            continue
+        if patch_group != group_id:
+            continue
+
+        pre_dir = task.run_dir / f"apply_{patch_id}" / "pre_injection"
+        if pre_dir.exists():
+            restored += _rollback_apply_dir(pre_dir, task.ffmpeg_root)
+
+    if restored:
+        print(f"[PATCH] 已按 group 回滚 {restored} 个文件 (group_id={group_id})")
+        return restored
+
+    if has_legacy:
+        print("[PATCH][WARN] 检测到旧版 PATCH artifact 缺少 group_id，降级为回滚最近一次 apply")
+        _rollback_previous_apply(task)
+    return restored
     if not harness_path.exists():
         raise FileNotFoundError(f"patch harness not found: {harness_path}")
 
@@ -358,7 +418,7 @@ def _check_source_has_riscv_decl(ffmpeg_root: Path, module: str) -> bool:
 
 
 def _build_planning_bundle(task: TaskContext) -> dict:
-    """Build a shared context bundle for locate/design/generate stages."""
+    """Build a shared context bundle for PATCH generation and retries."""
     file_search = task.load_artifact("SEARCH_FILE")
     if task.artifacts.reference_code_ids:
         sub = task.artifacts.reference_code_ids[-1].split("/", 1)[-1]
@@ -944,6 +1004,7 @@ def apply_patch(task: TaskContext, generate_plan: dict) -> PatchArtifact:
 
     return PatchArtifact(
         patch_id=patch_id,
+        group_id=_current_group_id(task),
         func=task.target.symbol,
         points=[],
         design={},
@@ -963,7 +1024,8 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
     """PATCH handler: generate + apply with controlled retries and routing."""
     hint = task.rollback_hint or ""
     task.rollback_hint = ""
-    if hint in ("locate", "design"):
+    if hint and hint != "generate":
+        print(f"[PATCH][WARN] unsupported rollback_hint={hint}, degrade to generate")
         hint = "generate"
 
     try:
@@ -1020,6 +1082,7 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
         print(f"[PATCH] 生成闭环校验仍失败，回到 PATCH(generate): {generate_issues}")
         artifact = PatchArtifact(
             patch_id=now_id(),
+            group_id=_current_group_id(task),
             func=task.target.symbol,
             points=[],
             design={},
@@ -1032,13 +1095,13 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
         aid = task.save_artifact("PATCH", artifact, sub_id=task.target.symbol)
         task.artifacts.patch_ids.append(aid)
 
-        task.artifacts.group_iteration_count += 1
+        task.artifacts.prebuild_generate_retries += 1
         record_trajectory_action(
             "patch_route_decision",
-            f"pre_build_generate_fail -> PATCH(generate), iter={task.artifacts.group_iteration_count}, issues={generate_issues}",
+            f"pre_build_generate_fail -> PATCH(generate), iter={task.artifacts.prebuild_generate_retries}, issues={generate_issues}",
         )
 
-        if task.artifacts.group_iteration_count >= _MAX_PREBUILD_PATCH_RETRIES:
+        if task.artifacts.prebuild_generate_retries >= _MAX_PREBUILD_PATCH_RETRIES:
             print(f"[PATCH] 当前 group 预构建重试已达上限({_MAX_PREBUILD_PATCH_RETRIES})，回到 PLAN")
             task.current_state = TaskState.PLAN
             return task
@@ -1054,6 +1117,7 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
     task.artifacts.patch_ids.append(aid)
 
     if artifact.success:
+        task.artifacts.prebuild_generate_retries = 0
         for ap in artifact.applied_paths:
             print(f"  ✓ {ap}")
         record_trajectory_action("patch_route_decision", "patch_apply_success -> BUILD")
@@ -1068,8 +1132,8 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
     )
 
     if next_state == TaskState.PATCH:
-        task.artifacts.group_iteration_count += 1
-        if task.artifacts.group_iteration_count >= _MAX_PREBUILD_PATCH_RETRIES:
+        task.artifacts.prebuild_generate_retries += 1
+        if task.artifacts.prebuild_generate_retries >= _MAX_PREBUILD_PATCH_RETRIES:
             print(f"[PATCH] apply 失败重试已达上限({_MAX_PREBUILD_PATCH_RETRIES})，回到 PLAN")
             task.current_state = TaskState.PLAN
             return task
@@ -1181,6 +1245,7 @@ def run_patch_stage_tools(task: TaskContext, kb_patterns: list[dict] | None = No
     artifact = run_patch_with_tools(task)
 
     if artifact.success:
+        task.artifacts.prebuild_generate_retries = 0
         for ap in artifact.applied_paths:
             print(f"  ✓ {ap}")
         record_trajectory_action("patch_route_decision", "patch_apply_success_tools -> BUILD")
@@ -1195,8 +1260,8 @@ def run_patch_stage_tools(task: TaskContext, kb_patterns: list[dict] | None = No
     )
 
     if next_state == TaskState.PATCH:
-        task.artifacts.group_iteration_count += 1
-        if task.artifacts.group_iteration_count >= _MAX_PREBUILD_PATCH_RETRIES:
+        task.artifacts.prebuild_generate_retries += 1
+        if task.artifacts.prebuild_generate_retries >= _MAX_PREBUILD_PATCH_RETRIES:
             print(f"[PATCH] apply 失败重试已达上限({_MAX_PREBUILD_PATCH_RETRIES})，回到 PLAN")
             task.current_state = TaskState.PLAN
             return task

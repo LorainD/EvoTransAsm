@@ -2,7 +2,7 @@
 
 New state-machine version:
   - Classifies errors (compile / link / runtime / test_mismatch)
-  - Determines rollback target (locate / design / generate)
+    - Determines rollback target (generate-only, diagnostics via fix_actions)
   - Produces DebugArtifact for persistence
 
 Legacy pipeline helpers (run_fix_loop, DebugContext, DebugResult, debug())
@@ -44,8 +44,6 @@ class ErrorClass(Enum):
 
 
 class RollbackTarget(Enum):
-    LOCATE = "locate"       # anchor drift / patch applied at wrong position
-    DESIGN = "design"       # build system issue (Makefile, missing include)
     GENERATE = "generate"   # code syntax / logic error
 
 
@@ -73,26 +71,7 @@ def determine_rollback(
 
     Uses rules first; falls back to LLM if cfg is provided.
     """
-    lower = error_text.lower()
-
-    # Rule-based heuristics based on content (kept for fallback when LLM fails).
-    if error_kind == "link_error" or "undefined reference" in lower or "ld returned" in lower:
-        if "undefined reference" in lower and "init_riscv" in lower:
-            return RollbackTarget.DESIGN  # Makefile didn't add the file
-        if "no such file" in lower or "no such file or directory" in lower:
-            return RollbackTarget.LOCATE
-        return RollbackTarget.DESIGN
-
-    if error_kind == "compile_error":
-        if "no such file or directory" in lower or "no such file" in lower:
-            return RollbackTarget.LOCATE
-        if "makefile" in lower or "no rule to make" in lower:
-            return RollbackTarget.DESIGN
-        return RollbackTarget.GENERATE
-
-    if error_kind in {"test_mismatch", "runtime_error"}:
-        return RollbackTarget.GENERATE
-
+    _ = (error_kind, error_text, cfg)
     return RollbackTarget.GENERATE
 
 
@@ -168,6 +147,7 @@ def _llm_classify(
 
 _MAX_DEBUG_CYCLES = 3
 _MAX_GROUP_ITERATIONS = 3
+_MAX_PREBUILD_PATCH_RETRIES = 3
 
 
 def _move_to_next_group_or_finish(task: TaskContext) -> TaskContext:
@@ -182,10 +162,20 @@ def _move_to_next_group_or_finish(task: TaskContext) -> TaskContext:
         task.current_state = TaskState.TASK_UPDATE
         return task
 
+    current_group_id = ""
     if plan_data.current_group_idx < len(plan_data.groups):
         gid = plan_data.groups[plan_data.current_group_idx].group_id
+        current_group_id = gid
         if gid and gid not in plan_data.failed_groups:
             plan_data.failed_groups.append(gid)
+
+    if current_group_id:
+        try:
+            from .patch import rollback_group_applies
+
+            rollback_group_applies(task, current_group_id)
+        except Exception as e:
+            print(f"[DEBUG][WARN] 跳组前回滚失败(group_id={current_group_id}): {e}")
 
     blocked = set(plan_data.completed_groups) | set(plan_data.failed_groups)
     next_idx = None
@@ -202,6 +192,7 @@ def _move_to_next_group_or_finish(task: TaskContext) -> TaskContext:
     plan_data.current_group_idx = next_idx
     task.save_artifact("PLAN", plan_data)
     task.artifacts.group_iteration_count = 0
+    task.artifacts.prebuild_generate_retries = 0
     task.artifacts.active_group_id = ""
     task.current_state = TaskState.PLAN
     return task
@@ -224,11 +215,17 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
                 latest_patch_error = ""
 
         if latest_patch_error.startswith("generate_validation_failed"):
-            task.artifacts.group_iteration_count += 1
-            print(f"[DEBUG] pre-build generate contract failure, retry PATCH(generate), group_iter={task.artifacts.group_iteration_count}")
+            task.artifacts.prebuild_generate_retries += 1
+            print(
+                "[DEBUG] pre-build generate contract failure, retry PATCH(generate), "
+                f"prebuild_iter={task.artifacts.prebuild_generate_retries}"
+            )
             record_trajectory_action("debug", "No build artifact; route generate_validation_failed back to PATCH")
-            if task.artifacts.group_iteration_count >= _MAX_GROUP_ITERATIONS:
-                print(f"[DEBUG] 当前 group 已达最大迭代次数 ({_MAX_GROUP_ITERATIONS})，回到 PLAN 选择下一组")
+            if task.artifacts.prebuild_generate_retries >= _MAX_PREBUILD_PATCH_RETRIES:
+                print(
+                    "[DEBUG] 当前 group 预构建重试已达最大迭代次数 "
+                    f"({_MAX_PREBUILD_PATCH_RETRIES})，回到 PLAN 选择下一组"
+                )
                 return _move_to_next_group_or_finish(task)
             task.rollback_hint = RollbackTarget.GENERATE.value
             task.current_state = TaskState.PATCH
@@ -392,7 +389,7 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
         # sensible defaults even if the LLM output is partial or malformed.
         if artifact.error_class not in {e.value for e in ErrorClass}:
             artifact.error_class = default_error_class.value
-        if artifact.rollback_target not in {e.value for e in RollbackTarget}:
+        if artifact.rollback_target not in {RollbackTarget.GENERATE.value}:
             artifact.rollback_target = fallback_rollback.value
         if not artifact.error_note:
             artifact.error_note = fine_error_kind
@@ -406,8 +403,10 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
                 artifact.error_note = f"{prefix} {artifact.error_note}"
             else:
                 artifact.error_note = prefix
-        if checkasm_llm_analysis.rollback_target:
-            artifact.rollback_target = checkasm_llm_analysis.rollback_target
+        if checkasm_llm_analysis.rollback_target and checkasm_llm_analysis.rollback_target != RollbackTarget.GENERATE.value:
+            artifact.fix_actions = [
+                f"diagnostic_rollback_target={checkasm_llm_analysis.rollback_target}"
+            ] + artifact.fix_actions
         if checkasm_llm_analysis.fix_actions:
             artifact.fix_actions = checkasm_llm_analysis.fix_actions + artifact.fix_actions
         if checkasm_llm_analysis.suggestion:
@@ -423,6 +422,7 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
         artifact.root_cause = root_cause
     if not artifact.test_id:
         artifact.test_id = test_id
+    artifact.rollback_target = RollbackTarget.GENERATE.value
 
     print(f"\n[DEBUG] 错误阶段(tag): {artifact.error_class}")
     print(f"[DEBUG] 回滚目标: {artifact.rollback_target}")
@@ -450,7 +450,7 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
     if task.artifacts.group_iteration_count >= _MAX_GROUP_ITERATIONS:
         print(f"\n[DEBUG] 当前 group 已达最大迭代次数 ({_MAX_GROUP_ITERATIONS})，回到 PLAN 选择下一组")
         return _move_to_next_group_or_finish(task)
-    task.rollback_hint = artifact.rollback_target
+    task.rollback_hint = RollbackTarget.GENERATE.value
     task.current_state = TaskState.PATCH
     return task
 

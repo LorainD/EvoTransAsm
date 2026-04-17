@@ -61,7 +61,7 @@ class StateMachine:
             # Allow a controlled PATCH self-transition when rollback_hint is set.
             if self.task.current_state == prev_state:
                 hint = getattr(self.task, "rollback_hint", "")
-                if state == TaskState.PATCH and hint in {"locate", "design", "generate"}:
+                if state == TaskState.PATCH and hint == "generate":
                     print(f"[statemachine] controlled PATCH self-transition with rollback_hint={hint}.")
                     continue
                 print(f"[statemachine] handler for {state.value} did not "

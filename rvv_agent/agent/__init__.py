@@ -6,7 +6,7 @@ analyze  — 函数发现 + LLM 语义分析（discover_functions / AnalysisResu
 chat     — 交互式 human-in-the-loop 迁移循环（状态机驱动）
 debug    — 结构化构建错误诊断 + 回滚决策
 intent   — 用户意图解析（Intent / parse_intent）
-patch    — 4步 PATCH 阶段（locate/design/generate/apply，chat 模式）
+patch    — PATCH 阶段（生成/应用/回退自愈，chat 模式）
 plan     — 迁移计划生成（Plan / fixed_plan / llm_plan）
 report   — 运行报告落盘（write_report）
 search   — 源码搜索、参考文件检索、上下文构建

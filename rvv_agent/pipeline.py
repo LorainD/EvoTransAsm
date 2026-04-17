@@ -36,6 +36,7 @@ from .core.task import (
     TaskState,
     TaskStatus,
     load_func_discover_artifact,
+    load_plan_artifact,
 )
 from .core.config import is_board_enabled
 from .core.util import (
@@ -119,7 +120,35 @@ def _handle_retrieve_pipeline(task: TaskContext) -> TaskContext:
 
 
 def _handle_plan_pipeline(task: TaskContext) -> TaskContext:
-    """PLAN: use fixed_plan and synchronize function_order from FUNC_DISCOVER."""
+    """PLAN: resume existing plan when present, otherwise initialize fixed plan."""
+    try:
+        existing = load_plan_artifact(task.load_artifact("PLAN"))
+        if existing.groups:
+            idx = int(existing.current_group_idx)
+            if idx < 0:
+                idx = 0
+            existing.current_group_idx = idx
+            aid = task.save_artifact("PLAN", existing)
+            task.artifacts.plan_id = aid
+            task.task.plan_id = aid
+
+            if idx < len(existing.groups):
+                next_group_id = existing.groups[idx].group_id
+                if getattr(task.artifacts, "active_group_id", "") != next_group_id:
+                    task.artifacts.group_iteration_count = 0
+                    task.artifacts.prebuild_generate_retries = 0
+                    task.artifacts.active_group_id = ""
+                print(
+                    f"[pipeline] Continue existing PLAN: group [{idx + 1}/{len(existing.groups)}] {next_group_id}"
+                )
+                task.current_state = TaskState.ANALYZE
+            else:
+                print("[pipeline] PLAN has no remaining group, moving to TASK_UPDATE")
+                task.current_state = TaskState.TASK_UPDATE
+            return task
+    except Exception:
+        pass
+
     symbol = task.target.symbol
 
     discovered_functions: list[DiscoveredFunction] = []
@@ -141,6 +170,9 @@ def _handle_plan_pipeline(task: TaskContext) -> TaskContext:
     aid = task.save_artifact("PLAN", artifact)
     task.artifacts.plan_id = aid
     task.task.plan_id = aid
+    task.artifacts.group_iteration_count = 0
+    task.artifacts.prebuild_generate_retries = 0
+    task.artifacts.active_group_id = ""
     record_trajectory_action("plan", f"Fixed plan for {symbol} ({len(discovered_functions)} funcs)")
     task.current_state = TaskState.ANALYZE
     return task

@@ -209,6 +209,7 @@ class PatchDesign:
 class PatchArtifact:
     """Output of PATCH stage (one per function)."""
     patch_id: str = ""
+    group_id: str = ""
     func: str = ""
     points: list[dict] = field(default_factory=list)
     design: dict = field(default_factory=dict)
@@ -252,7 +253,7 @@ class DebugArtifact:
     # classification details (compile/link/runtime/test_mismatch, anchor drift,
     # Makefile issues, inject_error hints, etc.).
     error_note: str = ""
-    rollback_target: str = ""   # locate | design | generate
+    rollback_target: str = ""   # generate
     fix_actions: list[str] = field(default_factory=list)
     llm_suggestion: str = ""
 
@@ -322,7 +323,10 @@ class ArtifactIndex:
     build_run_ids: list[str] = field(default_factory=list)
     debug_run_ids: list[str] = field(default_factory=list)
     kb_update_ids: list[str] = field(default_factory=list)
+    # DEBUG-only retry budget within a group.
     group_iteration_count: int = 0
+    # PATCH pre-build retry budget (generate/apply self-healing only).
+    prebuild_generate_retries: int = 0
     active_group_id: str = ""
 
 
@@ -342,7 +346,7 @@ class TaskContext:
     # Accumulated build errors across DEBUG cycles (fed to LLM for context)
     all_build_errors: list[str] = field(default_factory=list)
 
-    # Rollback hint from DEBUG handler: "locate" | "design" | "generate" | ""
+    # Rollback hint from DEBUG handler: "generate" | ""
     # PATCH handler reads this to skip earlier sub-steps on retry.
     rollback_hint: str = ""
 

@@ -201,9 +201,7 @@ def debug_classify_prompt(
     - 是 Makefile/注册问题，还是没有真正插入代码（inject_error）
     - 是 rvv_missing 这类语义错误，还是纯编译/链接错误
 3. 确定回滚目标 rollback_target:
-    - "locate": 锚点漂移或 patch 应用位置错误
-    - "design": 构建系统问题（Makefile 未添加文件、缺少头文件包含等）
-    - "generate": 代码本身有语法/逻辑错误
+    - "generate": 唯一合法值。即便根因是锚点/构建系统问题，也请在 fix_actions 中描述，回滚目标仍输出 generate。
 4. 给出具体修复建议（fix_actions）和一个简短的建议总结（suggestion）
 
 严格输出 JSON:
@@ -222,9 +220,7 @@ def checkasm_debug_prompt(context: dict) -> str:
 ## 任务
 1. 判断错误分类: compile_error | link_error | runtime_error | test_mismatch
 2. 判断回滚目标:
-   - locate: patch 应用位置/锚点错误
-   - design: 构建系统/注册/Makefile/初始化路径错误
-   - generate: 代码逻辑/指令/边界处理错误
+    - generate: 唯一合法值。若你认为是 locate/design 类问题，请把该诊断写入 fix_actions，而不是更改 rollback_target。
 3. 给出 3-8 条 fix_actions（每条尽量具体到文件或修改方向）
 4. 输出一段简短建议 suggestion
 

@@ -312,6 +312,7 @@ def handle_analyze(task: TaskContext) -> TaskContext:
     active_group = getattr(task.artifacts, "active_group_id", "")
     if active_group != current_group.group_id:
         task.artifacts.group_iteration_count = 0
+        task.artifacts.prebuild_generate_retries = 0
         task.artifacts.active_group_id = current_group.group_id
 
     print(f"\n正在分析 Group [{current_group_idx+1}/{len(plan_data.groups)}]: {current_group.group_id}")
@@ -450,6 +451,7 @@ def handle_analyze(task: TaskContext) -> TaskContext:
         plan_data.current_group_idx += 1
         task.save_artifact("PLAN", plan_data)
         task.artifacts.group_iteration_count = 0
+        task.artifacts.prebuild_generate_retries = 0
         task.artifacts.active_group_id = ""
         task.current_state = TaskState.PLAN
         return task
@@ -558,6 +560,7 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
                 next_group_id = existing.groups[existing.current_group_idx].group_id
                 if getattr(task.artifacts, "active_group_id", "") != next_group_id:
                     task.artifacts.group_iteration_count = 0
+                    task.artifacts.prebuild_generate_retries = 0
                     task.artifacts.active_group_id = ""
                 print(
                     f"\n继续执行已有 PLAN：Group [{existing.current_group_idx+1}/{len(existing.groups)}] "
@@ -643,6 +646,7 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
     task.artifacts.plan_id = aid
     task.task.plan_id = aid
     task.artifacts.group_iteration_count = 0
+    task.artifacts.prebuild_generate_retries = 0
     task.artifacts.active_group_id = ""
 
     task.current_state = TaskState.ANALYZE
@@ -1041,6 +1045,7 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
             plan_data.current_group_idx += 1
             task.save_artifact("PLAN", plan_data)
             task.artifacts.group_iteration_count = 0
+            task.artifacts.prebuild_generate_retries = 0
             task.artifacts.active_group_id = ""
             if plan_data.current_group_idx < len(plan_data.groups):
                 task.current_state = TaskState.ANALYZE
@@ -1148,6 +1153,7 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
         plan_data.current_group_idx += 1
         task.save_artifact("PLAN", plan_data)
         task.artifacts.group_iteration_count = 0
+        task.artifacts.prebuild_generate_retries = 0
         task.artifacts.active_group_id = ""
 
         if plan_data.current_group_idx < len(plan_data.groups):
