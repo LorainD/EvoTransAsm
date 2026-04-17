@@ -66,6 +66,7 @@ from ..core.util import (
 from dataclasses import asdict
 from ..memory.knowledge_base import KnowledgeBase, Pattern, ErrorRecord
 from ..tool.interactive import prompt_text, prompt_yes_no
+from .context_builder import ContextBuilder
 
 
 # ---------------------------------------------------------------------------
@@ -585,9 +586,21 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
         fallback_names = task.target.functions or [symbol]
         discovered_functions = [DiscoveredFunction(name=name, role="core") for name in fallback_names if name]
 
+    reference_files_for_plan: list[str] = []
+    try:
+        plan_ctx = ContextBuilder(task).build_plan_prompt_context()
+        reference_files_for_plan = list(plan_ctx.reference_files)
+    except Exception:
+        reference_files_for_plan = []
+
     print("\n正在生成迁移计划…")
     try:
-        plan = llm_plan(task.cfg, symbol, functions=discovered_functions)
+        plan = llm_plan(
+            task.cfg,
+            symbol,
+            functions=discovered_functions,
+            reference_files=reference_files_for_plan,
+        )
     except Exception as e:
         print(f"[PLAN] 计划生成已取消: {e}")
         task.current_state = TaskState.DONE

@@ -250,13 +250,18 @@ def _repair_plan_json_with_llm(
     return extract_json_from_llm(repaired_raw)
 
 
-def llm_plan(cfg: AppConfig, symbol: str, functions: list[DiscoveredFunction] | None = None) -> PlanArtifact:
+def llm_plan(
+    cfg: AppConfig,
+    symbol: str,
+    functions: list[DiscoveredFunction] | None = None,
+    reference_files: list[str] | None = None,
+) -> PlanArtifact:
     """调用 LLM 生成针对 symbol 的迁移计划，失败时回退到 fixed_plan。"""
     discovered = list(functions or [])
     prompt_functions = [asdict(f) for f in discovered]
     messages = [
         LlmMessage(role="system", content=system_prompt()),
-        LlmMessage(role="user", content=plan_prompt(symbol, prompt_functions)),
+        LlmMessage(role="user", content=plan_prompt(symbol, prompt_functions, reference_files)),
     ]
 
     raw = ""

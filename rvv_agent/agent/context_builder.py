@@ -44,6 +44,14 @@ class DebugContext:
     known_fixes: list[dict] = field(default_factory=list)
 
 
+@dataclass
+class PlanPromptContext:
+    """Context for PLAN stage prompt generation."""
+    reference_files: list[str] = field(default_factory=list)
+    existing_rvv_files: list[str] = field(default_factory=list)
+    has_existing_rvv: bool = False
+
+
 class ContextBuilder:
     """Builds stage-specific LLM context payloads from task artifacts."""
 
@@ -146,6 +154,62 @@ class ContextBuilder:
             "function_analysis": scoped_map,
             "symbol": analysis.get("symbol", "") if isinstance(analysis, dict) else "",
         }
+
+    def build_plan_prompt_context(self) -> PlanPromptContext:
+        """Build PLAN prompt context from SEARCH_FILE artifact.
+
+        Returns an ordered reference file list and existing RVV file hints.
+        Existing RVV files are tagged with "[existing-rvv]" in reference_files
+        for direct prompt consumption.
+        """
+        try:
+            search_art = self.task.load_artifact("SEARCH_FILE")
+        except Exception:
+            return PlanPromptContext()
+
+        if not isinstance(search_art, dict):
+            return PlanPromptContext()
+
+        selected_json = search_art.get("selected_json", {})
+        ordered_refs: list[str] = []
+        existing_rvv_files: list[str] = []
+        seen: set[str] = set()
+
+        def _append_ref(path_text: str) -> None:
+            p = str(path_text).strip()
+            if not p or p in seen:
+                return
+            seen.add(p)
+            ordered_refs.append(p)
+
+        if isinstance(selected_json, dict):
+            for key in ("c", "x86", "arm", "riscv", "headers", "makefiles", "checkasm"):
+                v = selected_json.get(key, [])
+                if isinstance(v, list):
+                    for p in v:
+                        _append_ref(str(p))
+
+            rvv = selected_json.get("existing_rvv", [])
+            if isinstance(rvv, list):
+                for p in rvv:
+                    s = str(p).strip()
+                    if not s:
+                        continue
+                    if s not in existing_rvv_files:
+                        existing_rvv_files.append(s)
+                    _append_ref(f"[existing-rvv] {s}")
+
+        if not ordered_refs:
+            selected_files = search_art.get("selected_files", [])
+            if isinstance(selected_files, list):
+                for p in selected_files:
+                    _append_ref(str(p))
+
+        return PlanPromptContext(
+            reference_files=ordered_refs,
+            existing_rvv_files=existing_rvv_files,
+            has_existing_rvv=bool(existing_rvv_files),
+        )
 
     def build_debug_context(
         self,

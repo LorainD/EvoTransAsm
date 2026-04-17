@@ -321,7 +321,11 @@ anchor_hint（生成器提供的插入位置提示）：
 """
 
 
-def plan_prompt(symbol: str, functions: list[dict] | None = None) -> str:
+def plan_prompt(
+  symbol: str,
+  functions: list[dict] | None = None,
+  reference_files: list[str] | None = None,
+) -> str:
     func_section = ""
     if functions:
         func_lines: list[str] = []
@@ -334,8 +338,14 @@ def plan_prompt(symbol: str, functions: list[dict] | None = None) -> str:
             )
         func_section = "\n已发现的待迁移函数：\n" + "\n".join(func_lines) + "\n"
 
+    refs_section = ""
+    if reference_files:
+        ref_lines = [f"- {str(p)}" for p in reference_files if str(p).strip()]
+        if ref_lines:
+            refs_section = "\n检索/选择出的参考文件：\n" + "\n".join(ref_lines) + "\n"
+
     return f"""你是 FFmpeg RVV SIMD 迁移助手。请为迁移算子 {symbol} 生成一份具体、可执行的迁移计划。
-{func_section}
+{func_section}{refs_section}
 目标：根据函数发现结果，判断应当：
 - 一次迁移单函数，还是一次迁移多个函数；
 - 哪些函数存在依赖关系，应放入同一组或前后顺序约束；
@@ -352,6 +362,8 @@ def plan_prompt(symbol: str, functions: list[dict] | None = None) -> str:
 - 如果某些函数语义相似、难度低，可以建议批量迁移。
 - 如果某函数明显更复杂，应该放在更后。
 - 如果生成了新的必要文件，需要更改makefile，针对makefile的修改只能添加，不能删除已有内容。
+- 若参考文件中出现 "[existing-rvv] libavcodec/riscv/..._rvv.S" 或 "[existing-rvv] ..._init.c"，
+  计划应明确优先在现有 RVV 文件上 append/增量扩展，而不是重复创建新的 .S 文件。
 - 输出严格 JSON（不要额外文字）。
 
 输出格式：
