@@ -10,6 +10,7 @@ import json
 from dataclasses import asdict
 
 from ..core.config import AppConfig
+from ..core.ir import default_ir, extract_ir_tags, normalize_ir
 from ..core.llm import LlmError, LlmMessage, chat_completion_with_retry
 from ..core.prompts import analysis_prompt, function_analysis_prompt, function_discovery_prompt, system_prompt
 from ..core.task import AnalysisArtifact, FuncDiscoverArtifact, FunctionAnalysis, MigrationTarget, DiscoveredFunction, load_func_discover_artifact
@@ -22,55 +23,52 @@ from ..tool.interactive import prompt_yes_no
 # AnalysisResult = AnalysisArtifact
 
 
-def collect_arch_simd_experience(per_function_analysis: dict[str, FunctionAnalysis]) -> dict[str, list[str]]:
-    """Aggregate x86/arm/aarch64 SIMD经验，供 analyze JSON 复用。"""
-    out: dict[str, list[str]] = {"x86": [], "arm": [], "aarch64": []}
-    seen: dict[str, set[str]] = {"x86": set(), "arm": set(), "aarch64": set()}
+def collect_ir_summary(per_function_analysis: dict[str, FunctionAnalysis]) -> dict[str, object]:
+    """Aggregate per-function IR into compact repo/group summary."""
+    computation_types: list[str] = []
+    memory_patterns: list[str] = []
+    vectorizable_count = 0
+    reduction_count = 0
 
-    for _, fa in per_function_analysis.items():
-        exp = fa.arch_simd_experience if isinstance(fa.arch_simd_experience, dict) else {}
-        for arch in ("x86", "arm", "aarch64"):
-            for item in exp.get(arch, []) if isinstance(exp.get(arch), list) else []:
-                s = str(item).strip()
-                if not s or s in seen[arch]:
-                    continue
-                seen[arch].add(s)
-                out[arch].append(s)
+    for fa in per_function_analysis.values():
+        ir = normalize_ir(fa.ir)
+        comp_type = str(ir["computation"].get("type", "unknown"))
+        mem_pattern = str(ir["memory"].get("access_pattern", "contiguous"))
+        if comp_type and comp_type not in computation_types:
+            computation_types.append(comp_type)
+        if mem_pattern and mem_pattern not in memory_patterns:
+            memory_patterns.append(mem_pattern)
+        if bool(ir["parallelism"].get("vectorizable", False)):
+            vectorizable_count += 1
+        if bool(ir["parallelism"].get("reduction", False)):
+            reduction_count += 1
 
-        for ref in fa.x86_refs:
-            s = f"x86_ref:{ref}"
-            if s not in seen["x86"]:
-                seen["x86"].add(s)
-                out["x86"].append(s)
-        for ref in fa.arm_refs:
-            r = str(ref)
-            target_arch = "aarch64" if "/aarch64/" in r.replace('\\\\', '/') else "arm"
-            s = f"{target_arch}_ref:{r}"
-            if s not in seen[target_arch]:
-                seen[target_arch].add(s)
-                out[target_arch].append(s)
-
-    return out
+    return {
+        "computation_types": computation_types,
+        "memory_patterns": memory_patterns,
+        "vectorizable_count": vectorizable_count,
+        "reduction_count": reduction_count,
+    }
 
 
 def collect_riscv_simd_experience(
     existing_rvv_files: list[str],
     per_function_analysis: dict[str, FunctionAnalysis],
 ) -> dict[str, object]:
-    """Aggregate riscv SIMD经验，供 repo_analyze JSON 复用。"""
-    patterns: list[str] = []
-    seen_patterns: set[str] = set()
-    for _, fa in per_function_analysis.items():
-        for p in fa.pattern:
-            s = str(p).strip()
-            if not s or s in seen_patterns:
+    """Aggregate RISC-V SIMD经验，供 repo_analyze JSON 复用。"""
+    tags: list[str] = []
+    seen_tags: set[str] = set()
+    for fa in per_function_analysis.values():
+        for t in extract_ir_tags(fa.ir):
+            s = str(t).strip()
+            if not s or s in seen_tags:
                 continue
-            seen_patterns.add(s)
-            patterns.append(s)
+            seen_tags.add(s)
+            tags.append(s)
 
     return {
         "existing_rvv_files": [str(x) for x in existing_rvv_files],
-        "inferred_patterns": patterns,
+        "inferred_ir_tags": tags,
     }
 
 
@@ -134,24 +132,41 @@ def _fallback_analysis(discovery: Discovery) -> dict:
     g = group_files(discovery)
     return {
         "symbol": discovery.symbol,
-        "datatype": "unknown",
-        "vectorizable": True,
-        "pattern": [],
-        "has_stride": False,
-        "has_saturation": False,
-        "reduction": False,
-        "tail_required": False,
-        "math_expression": "unknown",
-        "c_candidates": [f"{m.file}:{m.line}" for m in discovery.matches if m.file.endswith(".c")][:20],
-        "x86_refs": g["x86_refs"],
-        "arm_refs": g["arm_refs"],
-        "arch_simd_experience": {
-            "x86": [f"x86_ref:{x}" for x in g["x86_refs"][:5]],
-            "arm": [f"arm_ref:{x}" for x in g["arm_refs"][:5]],
-            "aarch64": [f"aarch64_ref:{x}" for x in g["aarch64_refs"][:5]],
+        "ir": default_ir(),
+        "simd_features": {
+            "has_saturation": False,
+            "has_widening": False,
+            "has_narrowing": False,
         },
+        "references": {
+            "c": [f"{m.file}:{m.line}" for m in discovery.matches if m.file.endswith(".c")][:20],
+            "x86": g["x86_refs"],
+            "arm": g["arm_refs"],
+        },
+        "kb_match": {"matched_pattern_ids": [], "match_reason": "fallback-no-llm"},
         "notes": "LLM 未运行或解析失败，使用 fallback。",
+        "confidence": 0.0,
     }
+
+
+def _to_ref_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(x) for x in value if str(x).strip()]
+
+
+def _build_kb_match(kb: KnowledgeBase | None, ir: dict) -> tuple[list[str], dict, list[dict]]:
+    if kb is None:
+        return [], {"matched_pattern_ids": [], "match_reason": "kb-unavailable"}, []
+    ranked = kb.match_patterns_by_ir(ir, max_results=3)
+    ids = [str(x.get("pattern_id", "")) for x in ranked if str(x.get("pattern_id", "")).strip()]
+    reason = "; ".join(f"{x.get('pattern_id')}: {x.get('reason')} ({x.get('score', 0):.2f})" for x in ranked)
+    kb_match = {
+        "matched_pattern_ids": ids,
+        "match_reason": reason or "no-match",
+    }
+    kb_patterns_list = [asdict(x["pattern"]) for x in ranked if x.get("pattern") is not None]
+    return ids, kb_match, kb_patterns_list
 
 
 def analyze_with_llm(
@@ -193,8 +208,16 @@ def analyze_with_llm(
         try:
             raw = chat_completion_with_retry(cfg.llm, messages, max_tokens=1600, stage="analyze", max_retries=3)
             data = extract_json_from_llm(raw)
+            normalized = {
+                "symbol": discovery.symbol,
+                "ir": normalize_ir(data.get("ir", {})),
+                "simd_features": data.get("simd_features", {}) if isinstance(data.get("simd_features"), dict) else {},
+                "references": data.get("references", {}) if isinstance(data.get("references"), dict) else {},
+                "notes": str(data.get("notes", "")),
+                "confidence": float(data.get("confidence", 0.0) or 0.0),
+            }
             return AnalysisArtifact(
-                analysis_json=data,
+                analysis_json=normalized,
                 symbol=discovery.symbol,
                 raw_text=raw,
                 llm_used=True,
@@ -236,13 +259,8 @@ def analyze_with_llm(
         kb_error_classes: list[str] = []
         kb_patterns_list: list[dict] = []
         if kb:
-            tags = [func.semantic_hint] if func.semantic_hint else []
-            if func.role:
-                tags.append(func.role)
-            patterns = kb.search_patterns(tags=tags, max_results=3) if tags else []
-            kb_pattern_ids = [p.pattern_id for p in patterns]
-            kb_patterns_list = [asdict(p) for p in patterns]
-
+            seed_patterns = kb.search_patterns(symbol=discovery.symbol, max_results=3)
+            kb_patterns_list = [asdict(p) for p in seed_patterns]
             errors = kb.search_errors(keyword=func_name, max_results=2)
             kb_error_classes = list(set(e.error_class for e in errors if e.error_class))
 
@@ -268,21 +286,27 @@ def analyze_with_llm(
                 max_retries=3,
             )
             data = extract_json_from_llm(raw)
+            ir = normalize_ir(data.get("ir", {}))
+            matched_ids, kb_match, ranked_patterns = _build_kb_match(kb, ir)
+            if matched_ids:
+                kb_pattern_ids = matched_ids
+            if ranked_patterns:
+                kb_patterns_list = ranked_patterns
+
+            refs = data.get("references", {}) if isinstance(data.get("references"), dict) else {}
+            c_refs = _to_ref_list(refs.get("c", []))
+            x86_refs = _to_ref_list(refs.get("x86", []))
+            arm_refs = _to_ref_list(refs.get("arm", []))
+
             func_analysis = FunctionAnalysis(
                 function_name=func_name,
-                datatype=data.get("datatype", ""),
-                vectorizable=data.get("vectorizable", False),
-                pattern=data.get("pattern", []),
-                has_stride=data.get("has_stride", False),
-                has_saturation=data.get("has_saturation", False),
-                reduction=data.get("reduction", False),
-                tail_required=data.get("tail_required", False),
-                math_expression=data.get("math_expression", ""),
-                c_candidates=data.get("c_candidates", []),
-                x86_refs=data.get("x86_refs", []),
-                arm_refs=data.get("arm_refs", []),
-                arch_simd_experience=data.get("arch_simd_experience", {}) if isinstance(data.get("arch_simd_experience", {}), dict) else {},
-                notes=data.get("notes", ""),
+                ir=ir,
+                simd_features=data.get("simd_features", {}) if isinstance(data.get("simd_features"), dict) else {},
+                c_candidates=c_refs,
+                x86_refs=x86_refs,
+                arm_refs=arm_refs,
+                kb_match=kb_match,
+                notes=str(data.get("notes", "")),
                 kb_pattern_ids=kb_pattern_ids,
                 kb_error_classes=kb_error_classes,
                 migrate=int(data.get("migrate", 1)),
@@ -296,9 +320,13 @@ def analyze_with_llm(
                 raise
             func_analysis = FunctionAnalysis(
                 function_name=func_name,
-                datatype="unknown",
-                vectorizable=False,
-                arch_simd_experience={},
+                ir=default_ir(),
+                simd_features={
+                    "has_saturation": False,
+                    "has_widening": False,
+                    "has_narrowing": False,
+                },
+                kb_match={"matched_pattern_ids": [], "match_reason": "analyze-failed"},
                 kb_pattern_ids=kb_pattern_ids,
                 kb_error_classes=kb_error_classes,
                 notes=f"分析失败: {str(e)[:100]}",
@@ -307,7 +335,15 @@ def analyze_with_llm(
             )
             per_function_analysis[func_name] = func_analysis
 
+    summary = collect_ir_summary(per_function_analysis)
+    analysis_json = {
+        "symbol": discovery.symbol,
+        "ir_summary": summary,
+        "function_analysis": {name: asdict(obj) for name, obj in per_function_analysis.items()},
+    }
+
     return AnalysisArtifact(
+        analysis_json=analysis_json,
         per_function_analysis=per_function_analysis,
         symbol=discovery.symbol,
         raw_text="",

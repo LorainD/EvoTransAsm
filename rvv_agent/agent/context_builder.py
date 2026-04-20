@@ -76,7 +76,8 @@ class ContextBuilder:
                 {
                     "pattern_id": p.pattern_id,
                     "description": p.notes,
-                    "implementation": str(p.simd_strategy)[:500],
+                    "ir": p.ir,
+                    "simd_features": p.simd_features,
                 }
                 for p in patterns
             ]

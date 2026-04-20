@@ -7,7 +7,7 @@ import re
 
 from .agent.analyze import (
     analyze_with_llm,
-    collect_arch_simd_experience,
+    collect_ir_summary,
     collect_riscv_simd_experience,
     discover_functions,
 )
@@ -120,11 +120,14 @@ def _extract_repository_constraints(ffmpeg_root: Path, existing_rvv_files: list[
 
 
 def _system_analyze_summary(symbol: str, analysis_json: dict, per_func: dict, existing_rvv_count: int) -> str:
-    datatype = analysis_json.get("datatype", "unknown") if isinstance(analysis_json, dict) else "unknown"
-    vectorizable = bool(analysis_json.get("vectorizable", False)) if isinstance(analysis_json, dict) else False
+    summary = analysis_json.get("ir_summary", {}) if isinstance(analysis_json, dict) else {}
+    comp_types = summary.get("computation_types", []) if isinstance(summary, dict) else []
+    vectorizable_count = int(summary.get("vectorizable_count", 0)) if isinstance(summary, dict) else 0
+    comp_type = str(comp_types[0]) if isinstance(comp_types, list) and comp_types else "unknown"
+    vectorizable = vectorizable_count > 0
     migratable = [name for name, v in per_func.items() if int(v.get("migrate", 0)) == 1]
     return (
-        f"symbol={symbol}; datatype={datatype}; vectorizable={vectorizable}; "
+        f"symbol={symbol}; computation={comp_type}; vectorizable={vectorizable}; "
         f"existing_rvv_files={existing_rvv_count}; migratable_functions={len(migratable)}"
     )
 
@@ -157,14 +160,13 @@ def _analyze_one_symbol(cfg: AppConfig, ffmpeg_root: Path, symbol: str) -> dict:
     per_func = {}
     for fname, fobj in analyzed.per_function_analysis.items():
         per_func[fname] = {
-            "datatype": fobj.datatype,
-            "vectorizable": fobj.vectorizable,
-            "pattern": fobj.pattern,
-            "math_expression": fobj.math_expression,
+            "ir": fobj.ir,
+            "simd_features": fobj.simd_features,
             "migrate": fobj.migrate,
             "migrate_reason": fobj.migrate_reason,
             "x86_refs": fobj.x86_refs,
             "arm_refs": fobj.arm_refs,
+            "kb_match": fobj.kb_match,
             "notes": fobj.notes,
         }
 
@@ -179,7 +181,7 @@ def _analyze_one_symbol(cfg: AppConfig, ffmpeg_root: Path, symbol: str) -> dict:
         [str(x) for x in existing_rvv],
         analyzed.per_function_analysis,
     )
-    arch_simd_experience = collect_arch_simd_experience(analyzed.per_function_analysis)
+    ir_summary = collect_ir_summary(analyzed.per_function_analysis)
 
     return {
         "symbol": symbol,
@@ -188,7 +190,7 @@ def _analyze_one_symbol(cfg: AppConfig, ffmpeg_root: Path, symbol: str) -> dict:
         "semantic_analysis": {
             "analysis_json": analyzed.analysis_json,
             "per_function": per_func,
-            "arch_simd_experience": arch_simd_experience,
+            "ir_summary": ir_summary,
         },
         "repository_constraints": repository_constraints,
         "riscv_simd_experience": riscv_simd_experience,

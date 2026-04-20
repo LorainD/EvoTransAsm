@@ -274,11 +274,16 @@ def _decide_function_migration(func, fa) -> tuple[int, str]:
     name = (func.name or "").lower()
     note = (fa.notes or "").lower()
     ref_count = len(fa.x86_refs or []) + len(fa.arm_refs or []) + len(fa.c_candidates or [])
+    ir = fa.ir if isinstance(fa.ir, dict) else {}
+    parallelism = ir.get("parallelism", {}) if isinstance(ir.get("parallelism"), dict) else {}
+    computation = ir.get("computation", {}) if isinstance(ir.get("computation"), dict) else {}
+    vectorizable = bool(parallelism.get("vectorizable", False))
+    comp_type = str(computation.get("type", "unknown") or "unknown")
 
     if any(k in name for k in ("init", "register", "config", "setup")) and ref_count == 0:
         return 0, "初始化/注册类函数且缺少可复用SIMD参考，当前阶段跳过"
 
-    if not fa.vectorizable and ref_count == 0 and not (fa.pattern or []):
+    if not vectorizable and ref_count == 0 and comp_type == "unknown":
         return 0, "向量化收益低（无明显SIMD模式且缺少参考实现）"
 
     if "wrapper" in note or "trivial" in note:
@@ -289,7 +294,7 @@ def _decide_function_migration(func, fa) -> tuple[int, str]:
 
 def handle_analyze(task: TaskContext) -> TaskContext:
     """ANALYZE handler: per-function semantic analysis for current group."""
-    from .analyze import analyze_with_llm, collect_arch_simd_experience
+    from .analyze import analyze_with_llm, collect_ir_summary
     from .context_builder import ContextBuilder, ContextConfig
     from .search import Discovery
 
@@ -414,7 +419,7 @@ def handle_analyze(task: TaskContext) -> TaskContext:
         "skipped_functions": skipped_reasons,
     }
     aggregated_groups[current_group.group_id] = group_view
-    arch_simd_experience = collect_arch_simd_experience(merged.per_function_analysis)
+    ir_summary = collect_ir_summary(merged.per_function_analysis)
 
     # Keep top-level fields for backward compatibility while preserving full aggregation.
     merged.analysis_json = {
@@ -427,7 +432,8 @@ def handle_analyze(task: TaskContext) -> TaskContext:
         "all_group_functions": group_view["all_group_functions"],
         "migratable_functions": migratable,
         "skipped_functions": skipped_reasons,
-        "arch_simd_experience": arch_simd_experience,
+        "ir_summary": ir_summary,
+        "function_analysis": {name: asdict(obj) for name, obj in merged.per_function_analysis.items()},
     }
     merged.raw_text = "\n\n".join(raw_parts)
 
@@ -672,23 +678,38 @@ def handle_patch(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskCont
 
     kb_patterns = None
     if kb:
-        # Try tag-based search first using analysis results
+        # Try IR-based matching first using latest migratable function.
         search_tags: list[str] = []
+        selected_ir: dict | None = None
         try:
             analysis = task.load_artifact("ANALYZE")
             analysis_json = analysis.get("analysis_json", {})
-            # Extract tags from analysis: pattern list + datatype
-            if isinstance(analysis_json.get("pattern"), list):
-                search_tags.extend(str(t) for t in analysis_json["pattern"])
-            elif analysis_json.get("pattern"):
-                search_tags.append(str(analysis_json["pattern"]))
-            if analysis_json.get("datatype") and analysis_json["datatype"] != "unknown":
-                search_tags.append(str(analysis_json["datatype"]))
+            group_funcs = analysis_json.get("migratable_functions", []) if isinstance(analysis_json, dict) else []
+            per_func = analysis.get("per_function_analysis", {}) if isinstance(analysis, dict) else {}
+            if isinstance(group_funcs, list):
+                for fname in group_funcs:
+                    fobj = per_func.get(str(fname), {}) if isinstance(per_func, dict) else {}
+                    if isinstance(fobj, dict) and isinstance(fobj.get("ir"), dict):
+                        selected_ir = fobj.get("ir")
+                        break
+                    if hasattr(fobj, "ir") and isinstance(getattr(fobj, "ir"), dict):
+                        selected_ir = getattr(fobj, "ir")
+                        break
+            if isinstance(selected_ir, dict):
+                comp = selected_ir.get("computation", {}) if isinstance(selected_ir.get("computation"), dict) else {}
+                mem = selected_ir.get("memory", {}) if isinstance(selected_ir.get("memory"), dict) else {}
+                search_tags.extend([
+                    f"comp:{comp.get('type', 'unknown')}",
+                    f"mem:{mem.get('access_pattern', 'contiguous')}",
+                ])
         except Exception:
             pass
 
         found = []
-        if search_tags:
+        if selected_ir:
+            ranked = kb.match_patterns_by_ir(selected_ir, max_results=3)
+            found = [item.get("pattern") for item in ranked if item.get("pattern") is not None]
+        elif search_tags:
             found = kb.search_patterns(tags=search_tags, max_results=3)
         # Fallback to symbol-based search if tag search yields nothing
         if not found:
@@ -1115,63 +1136,71 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
         file_search = {}
 
     analysis_json = analysis.get("analysis_json", {})
+    per_func = analysis.get("per_function_analysis", {}) if isinstance(analysis, dict) else {}
     selected_files = file_search.get("selected_files", [])
     symbol = task.target.symbol
 
-    # Build architecture field from file presence
-    arch_info: dict[str, list[str]] = {}
+    # Build references from file presence
+    references: dict[str, list[str]] = {"x86": [], "arm": [], "riscv": []}
     for f in selected_files:
         fl = f.lower()
         if "/x86/" in fl or "_sse" in fl or "_avx" in fl:
-            arch_info.setdefault("x86", []).append(f)
+            references.setdefault("x86", []).append(f)
         elif "/aarch64/" in fl or "/arm/" in fl or "_neon" in fl:
-            arch_info.setdefault("neon", []).append(f)
+            references.setdefault("arm", []).append(f)
         elif "/riscv/" in fl or "_rvv" in fl:
-            arch_info.setdefault("rvv", []).append(f)
+            references.setdefault("riscv", []).append(f)
 
     # Build source field with c_paths
     c_paths = [f for f in selected_files if f.endswith((".c", ".h"))]
 
-    # Extract semantic tags from analysis
-    algo_class = "unknown"
-    tags: list[str] = []
-    if isinstance(analysis_json.get("pattern"), list):
-        tags = [str(t) for t in analysis_json["pattern"]]
-        algo_class = tags[0] if tags else "unknown"
-    elif analysis_json.get("pattern"):
-        algo_class = str(analysis_json["pattern"])
-        tags = [algo_class]
+    # Extract representative IR from current group migratable function.
+    rep_ir = None
+    migratable = analysis_json.get("migratable_functions", []) if isinstance(analysis_json, dict) else []
+    if isinstance(migratable, list):
+        for fname in migratable:
+            fobj = per_func.get(str(fname), {}) if isinstance(per_func, dict) else {}
+            if isinstance(fobj, dict) and isinstance(fobj.get("ir"), dict):
+                rep_ir = fobj.get("ir")
+                break
+    if not isinstance(rep_ir, dict):
+        rep_ir = {
+            "computation": {"type": "unknown", "expression_tree": {"op": "unknown", "inputs": [], "params": {}}},
+            "memory": {"access_pattern": "contiguous", "stride": "none", "alignment": "unknown", "layout": "1D"},
+            "parallelism": {"vectorizable": False, "reduction": False, "dependency": "unknown", "tail_policy": "none"},
+        }
+
+    rep_simd_features = {
+        "has_saturation": False,
+        "has_widening": False,
+        "has_narrowing": False,
+    }
+    if isinstance(migratable, list):
+        for fname in migratable:
+            fobj = per_func.get(str(fname), {}) if isinstance(per_func, dict) else {}
+            if isinstance(fobj, dict) and isinstance(fobj.get("simd_features"), dict):
+                rep_simd_features = fobj.get("simd_features")
+                break
 
     # Create a pattern from this successful migration
     new_pattern = Pattern(
         pattern_id=f"{symbol}_{task.task_id}",
         source={"symbol": symbol, "c_paths": c_paths},
-        semantic_ir={
-            "algorithm_class": algo_class,
-            "tags": tags,
-            "loop": analysis_json.get("loop_structure", ""),
-            "memory_pattern": analysis_json.get("memory_access", ""),
-        },
-        simd_strategy={
-            "vectorize": analysis_json.get("vectorizable", True),
-            "reduction": analysis_json.get("reduction", False),
-            "tail_handling": "mask" if analysis_json.get("tail_required") else "none",
-            "unroll": analysis_json.get("unroll_factor", 1),
-        },
-        architecture=arch_info,
-        metadata={"weight": 0.5, "success_count": 1, "fail_count": 0},
+        ir=rep_ir,
+        simd_features=rep_simd_features if isinstance(rep_simd_features, dict) else {},
+        references=references,
+        meta={"weight": 0.5, "stats": {"success_count": 1, "fail_count": 0}},
         notes=f"Auto-extracted from migration of {symbol}",
     )
     kb.add_pattern(new_pattern)
 
     # Update weight for any patterns that were used during PLAN/PATCH
     # (build succeeded if we reached KB_UPDATE)
-    for pid in task.artifacts.patch_ids:
-        # The pattern_id format is "{symbol}_{task_id}", try to find matching
-        existing = kb.search_patterns(symbol=symbol, max_results=5)
-        for p in existing:
-            if p.pattern_id != new_pattern.pattern_id:
-                kb.update_weight(p.pattern_id, success=True)
+    ranked = kb.match_patterns_by_ir(rep_ir, max_results=5)
+    for item in ranked:
+        pid = str(item.get("pattern_id", ""))
+        if pid and pid != new_pattern.pattern_id:
+            kb.update_weight(pid, success=True)
 
     # Record any debug errors as error patterns
     new_errors: list[dict] = []

@@ -1,11 +1,8 @@
-"""memory.knowledge_base — Self-evolving knowledge base for RVV migration.
+"""memory.knowledge_base — IR-first knowledge base for RVV migration.
 
 Stores two kinds of records:
-  - **Pattern**: successful RVV migration patterns (semantic IR, SIMD strategy,
-    architecture-specific details) that can be retrieved to guide future
-    generations.
-  - **ErrorRecord**: recurring build/test errors and their proven fix
-    strategies.
+    - Pattern: reusable migration pattern in canonical IR form.
+    - ErrorRecord: recurring build/test errors and their proven fixes.
 
 Storage: a single JSON file (``knowledge_base.json`` by default).
 """
@@ -15,19 +12,24 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from ..core.ir import extract_ir_tags, ir_match_score, normalize_ir
+
 
 @dataclass
 class Pattern:
-    """A reusable RVV migration pattern."""
+    """A reusable RVV migration pattern in canonical IR schema."""
     pattern_id: str = ""
     source: dict = field(default_factory=dict)
-    semantic_ir: dict = field(default_factory=dict)
-    simd_strategy: dict = field(default_factory=dict)
-    architecture: dict = field(default_factory=dict)
-    metadata: dict = field(default_factory=lambda: {
+    ir: dict = field(default_factory=dict)
+    simd_features: dict = field(default_factory=dict)
+    references: dict = field(default_factory=dict)
+    meta: dict = field(default_factory=lambda: {
         "weight": 0.5,
-        "success_count": 0,
-        "fail_count": 0,
+        "stats": {
+            "success_count": 0,
+            "fail_count": 0,
+        },
+        "ir_tags": [],
     })
     notes: str = ""
 
@@ -58,7 +60,7 @@ class KnowledgeBase:
             return
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-            self.patterns = [Pattern(**p) for p in data.get("patterns", [])]
+            self.patterns = [self._normalize_pattern_record(p) for p in data.get("patterns", [])]
             self.errors = [ErrorRecord(**e) for e in data.get("errors", [])]
         except Exception:
             pass  # corrupted file — start fresh
@@ -79,6 +81,12 @@ class KnowledgeBase:
 
     def add_pattern(self, p: Pattern) -> None:
         # Deduplicate by pattern_id
+        p.ir = normalize_ir(p.ir)
+        p.meta = p.meta if isinstance(p.meta, dict) else {}
+        p.meta.setdefault("weight", 0.5)
+        p.meta.setdefault("stats", {"success_count": 0, "fail_count": 0})
+        p.meta["ir_tags"] = extract_ir_tags(p.ir)
+
         self.patterns = [x for x in self.patterns if x.pattern_id != p.pattern_id]
         self.patterns.append(p)
 
@@ -86,38 +94,73 @@ class KnowledgeBase:
         self,
         *,
         symbol: str | None = None,
-        algorithm_class: str | None = None,
+        ir: dict | None = None,
         tags: list[str] | None = None,
         max_results: int = 10,
     ) -> list[Pattern]:
-        """Filter patterns by keyword fields."""
-        results: list[Pattern] = []
+        """Filter patterns by symbol/tags and optional IR similarity."""
+        candidates: list[Pattern] = []
         for p in self.patterns:
-            if symbol and symbol not in p.source.get("symbol", ""):
-                continue
-            if algorithm_class and algorithm_class != p.semantic_ir.get("algorithm_class", ""):
+            if symbol and symbol not in str(p.source.get("symbol", "")):
                 continue
             if tags:
-                p_tags = set(p.semantic_ir.get("tags", []))
-                if not p_tags.intersection(tags):
+                p_tags = set(str(x) for x in p.meta.get("ir_tags", []))
+                if not p_tags.intersection(str(t) for t in tags):
                     continue
-            results.append(p)
-            if len(results) >= max_results:
-                break
-        # Sort by weight descending
-        results.sort(key=lambda x: x.metadata.get("weight", 0), reverse=True)
-        return results
+            candidates.append(p)
+
+        if ir:
+            ranked = self.match_patterns_by_ir(ir, max_results=max_results, candidates=candidates)
+            return [x["pattern"] for x in ranked]
+
+        candidates.sort(key=lambda x: float(x.meta.get("weight", 0.0)), reverse=True)
+        return candidates[:max_results]
+
+    def match_patterns_by_ir(
+        self,
+        ir: dict,
+        *,
+        max_results: int = 3,
+        candidates: list[Pattern] | None = None,
+    ) -> list[dict]:
+        """Return top matched patterns by IR similarity."""
+        source = candidates if candidates is not None else self.patterns
+        ranked: list[dict] = []
+        for p in source:
+            score, reasons = ir_match_score(ir, p.ir)
+            if score <= 0:
+                continue
+            ranked.append(
+                {
+                    "pattern": p,
+                    "pattern_id": p.pattern_id,
+                    "score": score,
+                    "reason": ", ".join(reasons),
+                }
+            )
+        ranked.sort(
+            key=lambda x: (
+                float(x.get("score", 0.0)),
+                float(getattr(x.get("pattern"), "meta", {}).get("weight", 0.0)),
+            ),
+            reverse=True,
+        )
+        return ranked[:max_results]
 
     def update_weight(self, pattern_id: str, success: bool) -> None:
         """Adjust pattern weight: success → +1, failure → -0.5."""
         for p in self.patterns:
             if p.pattern_id == pattern_id:
+                meta = p.meta if isinstance(p.meta, dict) else {}
+                stats = meta.get("stats", {}) if isinstance(meta.get("stats", {}), dict) else {}
                 if success:
-                    p.metadata["success_count"] = p.metadata.get("success_count", 0) + 1
-                    p.metadata["weight"] = p.metadata.get("weight", 0.5) + 1.0
+                    stats["success_count"] = int(stats.get("success_count", 0)) + 1
+                    meta["weight"] = float(meta.get("weight", 0.5)) + 1.0
                 else:
-                    p.metadata["fail_count"] = p.metadata.get("fail_count", 0) + 1
-                    p.metadata["weight"] = max(0.0, p.metadata.get("weight", 0.5) - 0.5)
+                    stats["fail_count"] = int(stats.get("fail_count", 0)) + 1
+                    meta["weight"] = max(0.0, float(meta.get("weight", 0.5)) - 0.5)
+                meta["stats"] = stats
+                p.meta = meta
                 break
 
     # ── error CRUD ───────────────────────────────────────────────────────
@@ -150,3 +193,70 @@ class KnowledgeBase:
                 break
         results.sort(key=lambda x: x.count, reverse=True)
         return results
+
+    @staticmethod
+    def _normalize_pattern_record(raw: dict) -> Pattern:
+        if not isinstance(raw, dict):
+            return Pattern()
+
+        pattern_id = str(raw.get("pattern_id", ""))
+        source = raw.get("source", {}) if isinstance(raw.get("source"), dict) else {}
+
+        ir = raw.get("ir")
+        if not isinstance(ir, dict):
+            # migrate legacy semantic_ir/simd_strategy fields into canonical IR
+            legacy_semantic = raw.get("semantic_ir", {}) if isinstance(raw.get("semantic_ir"), dict) else {}
+            legacy_strategy = raw.get("simd_strategy", {}) if isinstance(raw.get("simd_strategy"), dict) else {}
+            ir = {
+                "computation": {
+                    "type": str(legacy_semantic.get("algorithm_class", "unknown") or "unknown"),
+                    "expression_tree": {"op": "unknown", "inputs": [], "params": {}},
+                },
+                "memory": {
+                    "access_pattern": str(legacy_semantic.get("memory_pattern", "contiguous") or "contiguous"),
+                    "stride": "fixed" if "stride" in str(legacy_semantic.get("memory_pattern", "")).lower() else "none",
+                    "alignment": "unknown",
+                    "layout": "1D",
+                },
+                "parallelism": {
+                    "vectorizable": bool(legacy_strategy.get("vectorize", False)),
+                    "reduction": bool(legacy_strategy.get("reduction", False)),
+                    "dependency": "unknown",
+                    "tail_policy": "required" if str(legacy_strategy.get("tail_handling", "none")) != "none" else "none",
+                },
+            }
+        ir = normalize_ir(ir)
+
+        simd_features = raw.get("simd_features", {}) if isinstance(raw.get("simd_features"), dict) else {}
+        references = raw.get("references", {}) if isinstance(raw.get("references"), dict) else {}
+        if not references and isinstance(raw.get("architecture"), dict):
+            legacy_arch = raw.get("architecture", {})
+            references = {
+                "x86": legacy_arch.get("x86", []),
+                "arm": legacy_arch.get("neon", []) or legacy_arch.get("arm", []),
+                "riscv": legacy_arch.get("rvv", []),
+            }
+
+        meta = raw.get("meta", {}) if isinstance(raw.get("meta"), dict) else {}
+        if not meta and isinstance(raw.get("metadata"), dict):
+            old_meta = raw.get("metadata", {})
+            meta = {
+                "weight": float(old_meta.get("weight", 0.5)),
+                "stats": {
+                    "success_count": int(old_meta.get("success_count", 0)),
+                    "fail_count": int(old_meta.get("fail_count", 0)),
+                },
+            }
+        meta.setdefault("weight", 0.5)
+        meta.setdefault("stats", {"success_count": 0, "fail_count": 0})
+        meta["ir_tags"] = extract_ir_tags(ir)
+
+        return Pattern(
+            pattern_id=pattern_id,
+            source=source,
+            ir=ir,
+            simd_features=simd_features,
+            references=references,
+            meta=meta,
+            notes=str(raw.get("notes", "")),
+        )

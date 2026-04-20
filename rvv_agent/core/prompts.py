@@ -116,36 +116,53 @@ def analysis_prompt(
 {build_errors}
 """
 
-    return f"""任务：迁移/生成 {symbol} 的 RVV 优化。
+    return f"""任务：对 {symbol} 做结构化 IR 分析，输出可用于 RVV 代码生成与知识库匹配的 JSON。
 
-请基于下面的上下文（来自 workspace 的完整函数体源码）输出一个严格 JSON（不要额外文字），字段如下：
+⚠️ 输出必须是严格 JSON，禁止额外解释文字。
 
+输出格式：
 {{
   "symbol": "{symbol}",
-  "datatype": "float32|float64|int16|int32|int64|uint8|uint16|uint32|mixed",
-  "vectorizable": true|false,
-  "pattern": ["butterfly", "horizontal_add", "stride_load", "saturate", "tail"],
-  "has_stride": true|false,
-  "has_saturation": true|false,
-  "reduction": true|false,
-  "tail_required": true|false,
-  "math_expression": "精准数学伪代码，如 dst[i+1]=-dst[i+1] 或 out[i]=a[i]*b[i]",
-  "c_candidates": ["path:line", ...],
-  "x86_refs": ["path:line", ...],   // 优先包含 .S/.asm 实际 SIMD 实现，而非仅 init.c
-  "arm_refs": ["path:line", ...],   // 同上，NEON .S 文件比 init_arm.c 更重要
-  "arch_simd_experience": {{
-    "x86": ["从 x86 SIMD 实现中抽取的经验要点", ...],
-    "arm": ["从 ARM/NEON 实现中抽取的经验要点", ...],
-    "aarch64": ["从 AArch64 实现中抽取的经验要点", ...]
+  "ir": {{
+    "computation": {{
+      "type": "elementwise|reduction|convolution|unknown",
+      "expression_tree": {{
+        "op": "...",
+        "inputs": [ ... ],
+        "params": {{ ... }}
+      }}
+    }},
+    "memory": {{
+      "access_pattern": "contiguous|stride|gather|scatter",
+      "stride": "none|fixed|variable",
+      "alignment": "aligned|unaligned|unknown",
+      "layout": "1D|2D"
+    }},
+    "parallelism": {{
+      "vectorizable": true|false,
+      "reduction": true|false,
+      "dependency": "none|loop_carried|unknown",
+      "tail_policy": "none|required"
+    }}
   }},
-  "notes": "..."
+  "simd_features": {{
+    "has_saturation": true|false,
+    "has_widening": true|false,
+    "has_narrowing": true|false
+  }},
+  "references": {{
+    "c": ["path:line", ...],
+    "x86": ["path:line", ...],
+    "arm": ["path:line", ...]
+  }},
+  "notes": "...",
+  "confidence": 0.0
 }}
 
-注意：
-- datatype 必须推断出具体类型（INTFLOAT 通常为 float32，不要填 unknown）；
-- math_expression 用精准数学伪代码表达核心运算；
-- x86_refs 和 arm_refs 应优先填写含实际 SIMD 指令的 .S / .asm 文件路径及函数定义行号，
-  而不是仅填 *_init*.c 的行号—— init.c 只有函数指针赋值，.S/.asm 才有可供参考的向量化实现逻辑。
+规则：
+- expression_tree 必须是结构化 AST，禁止 math_expression 字符串；
+- 所有语义必须通过 ir 三层表达，禁止输出 pattern 字段；
+- x86/arm 引用优先 .S/.asm 的实际 SIMD 实现。
 {prior_section}{errors_section}
 上下文（完整函数体，带行号）：
 {context}
@@ -200,35 +217,58 @@ def function_analysis_prompt(
 ```
 """
 
-    return f"""任务：分析函数 {function_name} 的 RVV 迁移特性。
+    return f"""任务：对函数 {function_name} 做结构化分析，构建可用于 RVV 生成与 KB 匹配的 IR。
 
-请基于下面的上下文（来自 workspace 的完整函数体源码）输出一个严格 JSON（不要额外文字），字段如下：
+⚠️ 输出必须是严格 JSON，禁止额外解释文字。
 
+输出格式：
 {{
   "function_name": "{function_name}",
-  "datatype": "float32|float64|int16|int32|int64|uint8|uint16|uint32|mixed",
-  "vectorizable": true|false,
-  "pattern": ["butterfly", "horizontal_add", "stride_load", "saturate", "tail"],
-  "has_stride": true|false,
-  "has_saturation": true|false,
-  "reduction": true|false,
-  "tail_required": true|false,
-  "math_expression": "精准数学伪代码",
-  "c_candidates": ["path:line", ...],
-  "x86_refs": ["path:line", ...],
-  "arm_refs": ["path:line", ...],
-  "arch_simd_experience": {{
-    "x86": ["从 x86 SIMD 实现中抽取的经验要点", ...],
-    "arm": ["从 ARM/NEON 实现中抽取的经验要点", ...],
-    "aarch64": ["从 AArch64 实现中抽取的经验要点", ...]
+  "ir": {{
+    "computation": {{
+      "type": "elementwise|reduction|convolution|unknown",
+      "expression_tree": {{
+        "op": "...",
+        "inputs": [ ... ],
+        "params": {{ ... }}
+      }}
+    }},
+    "memory": {{
+      "access_pattern": "contiguous|stride|gather|scatter",
+      "stride": "none|fixed|variable",
+      "alignment": "aligned|unaligned|unknown",
+      "layout": "1D|2D"
+    }},
+    "parallelism": {{
+      "vectorizable": true|false,
+      "reduction": true|false,
+      "dependency": "none|loop_carried|unknown",
+      "tail_policy": "none|required"
+    }}
   }},
-  "notes": "..."
+  "simd_features": {{
+    "has_saturation": true|false,
+    "has_widening": true|false,
+    "has_narrowing": true|false
+  }},
+  "references": {{
+    "c": ["path:line", ...],
+    "x86": ["path:line", ...],
+    "arm": ["path:line", ...]
+  }},
+  "kb_match": {{
+    "matched_pattern_ids": ["pattern_id", ...],
+    "match_reason": "基于 computation/memory/parallelism 的匹配依据"
+  }},
+  "notes": "...",
+  "confidence": 0.0
 }}
 
-注意：
-- datatype 必须推断出具体类型；
-- math_expression 用精准数学伪代码表达核心运算；
-- x86_refs 和 arm_refs 应优先填写含实际 SIMD 指令的 .S / .asm 文件路径。
+规则：
+- expression_tree 必须是结构化 AST，禁止 math_expression 字符串；
+- 所有语义必须通过 ir 三层表达，禁止输出 pattern 字段；
+- 至少返回 0~3 个最相似 KB pattern，并写明匹配依据；
+- x86/arm 引用优先 .S/.asm 的实际 SIMD 实现。
 {prior_section}{errors_section}{kb_section}
 上下文（完整函数体，带行号）：
 {code_context}
