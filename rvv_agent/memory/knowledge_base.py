@@ -42,6 +42,7 @@ class ErrorRecord:
     fix_strategy: str = ""      # proven fix approach
     example: str = ""           # concrete example (error text snippet)
     count: int = 1
+    embedding: list[float] = field(default_factory=list)
 
 
 class KnowledgeBase:
@@ -61,7 +62,7 @@ class KnowledgeBase:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
             self.patterns = [self._normalize_pattern_record(p) for p in data.get("patterns", [])]
-            self.errors = [ErrorRecord(**e) for e in data.get("errors", [])]
+            self.errors = [self._normalize_error_record(e) for e in data.get("errors", [])]
         except Exception:
             pass  # corrupted file — start fresh
 
@@ -165,13 +166,24 @@ class KnowledgeBase:
 
     # ── error CRUD ───────────────────────────────────────────────────────
 
-    def add_error(self, e: ErrorRecord) -> None:
+    def add_error(self, e: ErrorRecord, cfg=None) -> None:
+        if not e.embedding and cfg is not None and e.pattern:
+            try:
+                from ..core.llm import get_text_embedding
+
+                feature_text = f"Error: {e.pattern}\nFix: {e.fix_strategy}"
+                e.embedding = get_text_embedding(feature_text, cfg.llm if hasattr(cfg, "llm") else cfg)
+            except Exception:
+                pass
+
         # Merge with existing record if same class + pattern
         for existing in self.errors:
             if existing.error_class == e.error_class and existing.pattern == e.pattern:
                 existing.count += 1
                 if e.fix_strategy:
                     existing.fix_strategy = e.fix_strategy
+                if e.embedding:
+                    existing.embedding = e.embedding
                 return
         self.errors.append(e)
 
@@ -193,6 +205,43 @@ class KnowledgeBase:
                 break
         results.sort(key=lambda x: x.count, reverse=True)
         return results
+
+    def search_errors_semantic(
+        self,
+        current_error_log: str,
+        cfg,
+        *,
+        error_class: str | None = None,
+        max_results: int = 3,
+        min_score: float = 0.6,
+    ) -> list[ErrorRecord]:
+        query = str(current_error_log or "").strip()
+        if not query:
+            return []
+
+        try:
+            from ..core.llm import cosine_similarity, get_text_embedding
+
+            q_emb = get_text_embedding(query[:500], cfg.llm if hasattr(cfg, "llm") else cfg)
+        except Exception:
+            q_emb = []
+
+        if not q_emb:
+            return self.search_errors(error_class=error_class, keyword=query[:120], max_results=max_results)
+
+        scored: list[tuple[float, ErrorRecord]] = []
+        for e in self.errors:
+            if error_class and e.error_class != error_class:
+                continue
+            score = cosine_similarity(q_emb, e.embedding) if e.embedding else 0.0
+            if score >= min_score:
+                scored.append((score, e))
+
+        if not scored:
+            return self.search_errors(error_class=error_class, keyword=query[:120], max_results=max_results)
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [rec for _, rec in scored[:max_results]]
 
     @staticmethod
     def _normalize_pattern_record(raw: dict) -> Pattern:
@@ -259,4 +308,26 @@ class KnowledgeBase:
             references=references,
             meta=meta,
             notes=str(raw.get("notes", "")),
+        )
+
+    @staticmethod
+    def _normalize_error_record(raw: dict) -> ErrorRecord:
+        if not isinstance(raw, dict):
+            return ErrorRecord()
+        emb_raw = raw.get("embedding", [])
+        emb: list[float] = []
+        if isinstance(emb_raw, list):
+            for x in emb_raw:
+                try:
+                    emb.append(float(x))
+                except Exception:
+                    emb = []
+                    break
+        return ErrorRecord(
+            error_class=str(raw.get("error_class", "")),
+            pattern=str(raw.get("pattern", "")),
+            fix_strategy=str(raw.get("fix_strategy", "")),
+            example=str(raw.get("example", "")),
+            count=int(raw.get("count", 1) or 1),
+            embedding=emb,
         )

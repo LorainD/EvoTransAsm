@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import os
 import time
 import urllib.error
@@ -244,6 +245,79 @@ def _endpoint_url(cfg: LlmConfig) -> str:
     if not url.endswith("/chat/completions"):
         url = url + "/chat/completions"
     return url
+
+
+def _embedding_endpoint_url(cfg: LlmConfig) -> str:
+    url = (cfg.base_url or "").strip().rstrip("/")
+    if not url:
+        raise LlmError("Missing LLM endpoint URL: set llm.base_url in rvv_agent.toml")
+    if url.endswith("/chat/completions"):
+        return url[: -len("/chat/completions")] + "/embeddings"
+    if not url.endswith("/embeddings"):
+        url = url + "/embeddings"
+    return url
+
+
+def get_text_embedding(text: str, cfg: LlmConfig, *, timeout_seconds: float = 60.0) -> list[float]:
+    """Get embedding vector via OpenAI-compatible /embeddings endpoint.
+
+    Returns empty list on failure to keep callers resilient.
+    """
+    text_in = str(text or "").strip()
+    if not text_in:
+        return []
+
+    api_key = os.getenv(cfg.api_key_env, "").strip()
+    if not api_key:
+        return []
+
+    model = str(getattr(cfg, "model", "") or "").strip()
+    if not model:
+        return []
+    url = _embedding_endpoint_url(cfg)
+    payload = {
+        "model": model,
+        "input": text_in[:3000],
+    }
+
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=_headers(api_key),
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        data = json.loads(raw)
+        emb = data.get("data", [{}])[0].get("embedding", [])
+        if isinstance(emb, list):
+            out: list[float] = []
+            for x in emb:
+                try:
+                    out.append(float(x))
+                except Exception:
+                    return []
+            return out
+        return []
+    except Exception:
+        return []
+
+
+def cosine_similarity(v1: list[float], v2: list[float]) -> float:
+    """Compute cosine similarity without third-party dependencies."""
+    if not v1 or not v2 or len(v1) != len(v2):
+        return 0.0
+    dot = 0.0
+    n1 = 0.0
+    n2 = 0.0
+    for a, b in zip(v1, v2):
+        dot += a * b
+        n1 += a * a
+        n2 += b * b
+    if n1 <= 0.0 or n2 <= 0.0:
+        return 0.0
+    return float(dot / (math.sqrt(n1) * math.sqrt(n2)))
 
 
 def _is_retryable_http(status_code: int) -> bool:

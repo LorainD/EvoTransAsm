@@ -28,6 +28,7 @@ from ..core.llm import (
 )
 from ..core.prompts import (
     files_refine_prompt,
+    kb_reflection_prompt,
     plan_refine_prompt,
     system_prompt,
 )
@@ -53,6 +54,7 @@ from ..core.task import (
 )
 from ..core.util import (
     ensure_dir,
+    extract_json_from_llm,
     extract_build_errors,
     fmt_argv,
     now_id,
@@ -1182,6 +1184,36 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
                 rep_simd_features = fobj.get("simd_features")
                 break
 
+    # Collect debug trajectory and final patch snippet for reflection.
+    debug_history_parts: list[str] = []
+    for debug_run_id in task.artifacts.debug_run_ids:
+        try:
+            dbg = task.load_artifact("DEBUG", sub_id=debug_run_id)
+        except Exception:
+            continue
+        if not isinstance(dbg, dict):
+            continue
+        err_text = str(dbg.get("error_text", "") or "").strip()
+        llm_sugg = str(dbg.get("llm_suggestion", "") or "").strip()
+        fix_actions = dbg.get("fix_actions", []) if isinstance(dbg.get("fix_actions", []), list) else []
+        fix_text = llm_sugg or "; ".join(str(x).strip() for x in fix_actions if str(x).strip())
+        if not err_text and not fix_text:
+            continue
+        debug_history_parts.append(f"报错: {err_text[:300]}\\n当时的尝试修复: {fix_text[:300]}")
+
+    final_code_str = ""
+    if task.artifacts.patch_ids:
+        try:
+            latest_patch_ref = task.artifacts.patch_ids[-1]
+            sub_id = latest_patch_ref.split("/", 1)[1] if "/" in latest_patch_ref else latest_patch_ref
+            latest_patch = task.load_artifact("PATCH", sub_id=sub_id)
+            if isinstance(latest_patch, dict):
+                final_code_str = json.dumps(latest_patch.get("generate_plan", {}), ensure_ascii=False)[:1000]
+        except Exception:
+            final_code_str = ""
+
+    extracted_notes = f"Auto-extracted from migration of {symbol}"
+
     # Create a pattern from this successful migration
     new_pattern = Pattern(
         pattern_id=f"{symbol}_{task.task_id}",
@@ -1190,9 +1222,8 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
         simd_features=rep_simd_features if isinstance(rep_simd_features, dict) else {},
         references=references,
         meta={"weight": 0.5, "stats": {"success_count": 1, "fail_count": 0}},
-        notes=f"Auto-extracted from migration of {symbol}",
+        notes=extracted_notes,
     )
-    kb.add_pattern(new_pattern)
 
     # Update weight for any patterns that were used during PLAN/PATCH
     # (build succeeded if we reached KB_UPDATE)
@@ -1202,20 +1233,96 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
         if pid and pid != new_pattern.pattern_id:
             kb.update_weight(pid, success=True)
 
-    # Record any debug errors as error patterns
+    # First try trajectory reflection to distill reusable experience.
     new_errors: list[dict] = []
-    for err_text in task.all_build_errors:
-        from .debug import classify_error
-        err_class = classify_error(err_text)
-        err_class_name = str(getattr(err_class, "value", err_class))
-        record = ErrorRecord(
-            error_class=err_class_name,
-            pattern=err_text[:200],
-            fix_strategy="auto-fixed during migration",
-            example=err_text[:500],
-        )
-        kb.add_error(record)
-        new_errors.append({"error_class": err_class_name, "pattern": err_text[:200]})
+    if debug_history_parts and task.cfg:
+        print("\n[KB_UPDATE] 正在通过 LLM 提炼轨迹与排错经验...")
+        prompt = kb_reflection_prompt(symbol, "\n---\n".join(debug_history_parts), final_code_str)
+        messages = [
+            LlmMessage(role="system", content="You are a knowledge extraction agent."),
+            LlmMessage(role="user", content=prompt),
+        ]
+        try:
+            raw = chat_completion_with_retry(task.cfg.llm, messages, max_tokens=1000, stage="kb_reflection", max_retries=2)
+            reflection_data = extract_json_from_llm(raw)
+
+            if isinstance(reflection_data.get("migration_patterns"), list) and reflection_data.get("migration_patterns"):
+                first_pattern = reflection_data["migration_patterns"][0]
+                if isinstance(first_pattern, dict):
+                    extracted_notes = str(first_pattern.get("notes", "") or "").strip() or extracted_notes
+
+            for err in reflection_data.get("error_diagnostics", []) if isinstance(reflection_data.get("error_diagnostics", []), list) else []:
+                if not isinstance(err, dict):
+                    continue
+                err_class = str(err.get("error_class", "") or "").strip() or "unknown"
+                pattern_text = str(err.get("pattern", "") or "").strip()[:200]
+                fix_strategy = str(err.get("fix_strategy", "") or "").strip() or "未知修复方案"
+                if not pattern_text:
+                    continue
+                record = ErrorRecord(
+                    error_class=err_class,
+                    pattern=pattern_text,
+                    fix_strategy=fix_strategy,
+                    example=pattern_text[:500],
+                    count=1,
+                )
+                kb.add_error(record, cfg=task.cfg)
+                new_errors.append({"error_class": err_class, "pattern": pattern_text, "fix_strategy": fix_strategy})
+        except Exception as e:
+            print(f"[KB_UPDATE] 轨迹提炼失败，降级为结构化 DEBUG 写入: {e}")
+
+    # Fallback or supplement: record DEBUG-stage errors using structured artifacts.
+    if not new_errors:
+        seen_error_keys: set[tuple[str, str]] = set()
+        for debug_run_id in task.artifacts.debug_run_ids:
+            try:
+                dbg = task.load_artifact("DEBUG", sub_id=debug_run_id)
+            except Exception:
+                continue
+
+            if not isinstance(dbg, dict):
+                continue
+
+            error_text = str(dbg.get("error_text", "") or "").strip()
+            if not error_text:
+                continue
+
+            err_class_name = str(dbg.get("error_note", "") or "").strip() or "unknown"
+
+            fix_actions = dbg.get("fix_actions", []) if isinstance(dbg.get("fix_actions", []), list) else []
+            fix_steps = [str(x).strip() for x in fix_actions if str(x).strip()]
+            llm_suggestion = str(dbg.get("llm_suggestion", "") or "").strip()
+            if fix_steps:
+                fix_strategy = "; ".join(fix_steps)
+            elif llm_suggestion:
+                fix_strategy = llm_suggestion[:300]
+            else:
+                fix_strategy = "auto-fixed during migration"
+
+            pattern_text = error_text[:200]
+            key = (err_class_name, pattern_text)
+            if key in seen_error_keys:
+                continue
+            seen_error_keys.add(key)
+
+            record = ErrorRecord(
+                error_class=err_class_name,
+                pattern=pattern_text,
+                fix_strategy=fix_strategy,
+                example=error_text[:500],
+            )
+            kb.add_error(record, cfg=task.cfg)
+            new_errors.append(
+                {
+                    "error_class": err_class_name,
+                    "pattern": pattern_text,
+                    "fix_strategy": fix_strategy,
+                }
+            )
+
+    # Finalize notes after reflection/fallback and save pattern.
+    new_pattern.notes = extracted_notes
+    kb.add_pattern(new_pattern)
 
     artifact = KBUpdateArtifact(
         new_patterns=[{"pattern_id": new_pattern.pattern_id, "symbol": symbol}],

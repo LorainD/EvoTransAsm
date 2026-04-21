@@ -227,7 +227,12 @@ class ContextBuilder:
             from .debug import classify_error
 
             error_class = classify_error(error_text)
-            known_fixes = self.kb.search_errors(error_class=error_class.value, max_results=3)
+            known_fixes = self.kb.search_errors_semantic(
+                error_text,
+                self.task.cfg,
+                error_class=error_class.value,
+                max_results=3,
+            ) if self.task.cfg else self.kb.search_errors(error_class=error_class.value, max_results=3)
             ctx["known_fixes"] = [
                 {
                     "pattern": f.pattern[:100],
@@ -275,7 +280,12 @@ class ContextBuilder:
             ctx["error_history"] = "\n---\n".join(self.task.all_build_errors[-5:])[: config.max_error_lines]
 
         if config.include_kb and self.kb:
-            known = self.kb.search_errors(error_class="test_mismatch", max_results=3)
+            known = self.kb.search_errors_semantic(
+                error_text,
+                self.task.cfg,
+                error_class="test_mismatch",
+                max_results=3,
+            ) if self.task.cfg else self.kb.search_errors(error_class="test_mismatch", max_results=3)
             ctx["known_fixes"] = [
                 {
                     "pattern": f.pattern[:100],
@@ -311,7 +321,12 @@ class ContextBuilder:
 
             if build_errors:
                 error_class = classify_error(build_errors)
-                kb_matches = self.kb.search_errors(error_class=error_class.value, max_results=config.max_kb_patterns)
+                kb_matches = self.kb.search_errors_semantic(
+                    build_errors,
+                    self.task.cfg,
+                    error_class=error_class.value,
+                    max_results=config.max_kb_patterns,
+                ) if self.task.cfg else self.kb.search_errors(error_class=error_class.value, max_results=config.max_kb_patterns)
                 kb_errors = [
                     {
                         "error_class": error_class.value,
@@ -372,7 +387,12 @@ class ContextBuilder:
             from .debug import classify_error
 
             error_class = classify_error(error_text)
-            kb_matches = self.kb.search_errors(error_class=error_class.value, max_results=3)
+            kb_matches = self.kb.search_errors_semantic(
+                error_text,
+                self.task.cfg,
+                error_class=error_class.value,
+                max_results=3,
+            ) if self.task.cfg else self.kb.search_errors(error_class=error_class.value, max_results=3)
             known_fixes = [
                 {
                     "pattern": f.pattern[:100],

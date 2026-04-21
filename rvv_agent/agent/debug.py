@@ -354,7 +354,12 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
     if kb:
         # 知识库按细粒度错误类型索引（compile_error/link_error/...），因此使用
         # fine_error_kind 作为查询 key，而不是阶段级的 error_class tag。
-        known = kb.search_errors(error_class=fine_error_kind, max_results=3)
+        known = kb.search_errors_semantic(
+            error_text,
+            task.cfg,
+            error_class=fine_error_kind,
+            max_results=3,
+        ) if task.cfg else kb.search_errors(error_class=fine_error_kind, max_results=3)
         for rec in known:
             if rec.fix_strategy:
                 kb_hints.append(f"[KB] {rec.pattern[:80]} -> {rec.fix_strategy}")

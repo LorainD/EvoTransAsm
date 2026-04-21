@@ -11,6 +11,36 @@ def system_prompt() -> str:
     )
 
 
+def kb_reflection_prompt(symbol: str, debug_history: str, final_code: str) -> str:
+    return f"""
+你是一个专业的底层编译器与汇编优化专家。
+以下是系统刚刚成功完成的 RISC-V Vector (RVV) 汇编迁移任务轨迹。
+
+【迁移目标】: {symbol}
+【Debug 排错历史】:
+{debug_history}
+【最终成功的代码片段 (Patch)】:
+{final_code}
+
+请分析上述轨迹，提炼出具有复用价值的经验，并严格按照以下 JSON 格式输出：
+{{
+  "migration_patterns": [
+    {{
+      "notes": "提炼的 RVV 汇编迁移策略（例如：如何处理结尾元素、使用了什么特定的指令组合）"
+    }}
+  ],
+  "error_diagnostics": [
+    {{
+      "error_class": "compile_error | link_error | runtime_error | test_mismatch",
+      "pattern": "提取原始报错日志中最核心的 100-200 个字符",
+      "fix_strategy": "总结解决该报错的根本方法（例如：Makefile 遗漏依赖、寄存器复用冲突等）"
+    }}
+  ]
+}}
+请确保只输出纯 JSON，不要包含任何 markdown 标记。
+"""
+
+
 def intent_prompt(user_text: str) -> str:
     return f"""你将解析用户意图，并输出严格 JSON（不要额外文字）。
 
