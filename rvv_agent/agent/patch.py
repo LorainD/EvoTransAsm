@@ -1166,9 +1166,11 @@ def generate_code(task: TaskContext,
     except (LlmError, Exception) as e: #TODO：错误处理应该是重连而不是直接使用placeholder
         print(f"[patch] generate failed: {e}")
         # Pipeline safety: never raise from PATCH generation.
-        # Return an empty plan so run_patch_stage can handle it via validation/retry.
-        record_trajectory_action("patch_generate_error", f"LLM generate failed: {str(e)[:200]}")
-        return {"generated": []}
+        # Return a structured error so the caller can route differently from
+        # content-validation failures.
+        err = f"llm_generate_failed:{type(e).__name__}:{str(e)[:240]}"
+        record_trajectory_action("patch_generate_error", err)
+        return {"generated": [], "error": err}
 
 
 # ---------------------------------------------------------------------------
@@ -1188,13 +1190,21 @@ def apply_patch(task: TaskContext, generate_plan: dict) -> PatchArtifact:
     logs: list[dict] = []
     applied_paths: list[str] = []
     diffs: list[dict] = []
+    skipped_missing_path = 0
+    skipped_empty_content = 0
 
     for item in _generated_items(generate_plan):
         target_path = str(item.get("target_path", "")).strip()
         content = str(item.get("content", ""))
         action = str(item.get("action", "create")).strip().lower()
 
-        if not target_path or not content:
+        if not target_path:
+            skipped_missing_path += 1
+            logs.append({"target_path": "", "action": action, "success": False, "error": "skip_missing_target_path"})
+            continue
+        if not content.strip():
+            skipped_empty_content += 1
+            logs.append({"target_path": target_path, "action": action, "success": False, "error": "skip_empty_content"})
             continue
         if action in ("delete", "remove", "overwrite"):
             logs.append({"target_path": target_path, "action": action,
@@ -1322,7 +1332,14 @@ def apply_patch(task: TaskContext, generate_plan: dict) -> PatchArtifact:
     success = (len(applied_paths) > 0 or not apply_ok) and not missing_post_checks
     error = ""
     if not applied_paths and apply_ok:
-        error = "apply_failed: no files written"
+        if skipped_missing_path or skipped_empty_content:
+            error = (
+                "apply_failed: no files written; "
+                f"skipped_missing_path={skipped_missing_path}; "
+                f"skipped_empty_content={skipped_empty_content}"
+            )
+        else:
+            error = "apply_failed: no files written"
     elif missing_post_checks:
         error = "; ".join(missing_post_checks)
 
@@ -1385,6 +1402,20 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
 
     print("\n[PATCH] Step 1/2: 生成代码…（可能需要 20-60 秒）")
     gen_plan = generate_code(task, kb_errors=kb_error_dicts, planning_bundle=planning_bundle)
+    gen_error = str(gen_plan.get("error", "") or "") if isinstance(gen_plan, dict) else ""
+    if gen_error:
+        # Infrastructure failure (LLM/network/JSON extraction) — do not treat as contract failure.
+        task.artifacts.prebuild_generate_retries += 1
+        record_trajectory_action(
+            "patch_route_decision",
+            f"patch_generate_infra_error -> retry_or_skip, iter={task.artifacts.prebuild_generate_retries}, error={gen_error}",
+        )
+        if task.artifacts.prebuild_generate_retries >= _MAX_PREBUILD_PATCH_RETRIES:
+            print(f"[PATCH] 生成基础设施错误重试已达上限({_MAX_PREBUILD_PATCH_RETRIES})，跳过当前组")
+            return _move_to_next_group_or_finish(task, outcome="failed")
+        task.rollback_hint = "generate"
+        task.current_state = TaskState.PATCH
+        return task
     ok_generate, generate_issues = _validate_generate_plan(gen_plan, planning_bundle.get("analysis_json", {}))
     record_trajectory_action("patch_validate", f"generate_ok={ok_generate}; issues={generate_issues}")
     if not ok_generate:
@@ -1395,6 +1426,19 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
             planning_bundle=planning_bundle,
             validation_feedback=generate_issues,
         )
+        gen_error = str(gen_plan.get("error", "") or "") if isinstance(gen_plan, dict) else ""
+        if gen_error:
+            task.artifacts.prebuild_generate_retries += 1
+            record_trajectory_action(
+                "patch_route_decision",
+                f"patch_generate_infra_error_after_validation -> retry_or_skip, iter={task.artifacts.prebuild_generate_retries}, error={gen_error}",
+            )
+            if task.artifacts.prebuild_generate_retries >= _MAX_PREBUILD_PATCH_RETRIES:
+                print(f"[PATCH] 生成基础设施错误重试已达上限({_MAX_PREBUILD_PATCH_RETRIES})，跳过当前组")
+                return _move_to_next_group_or_finish(task, outcome="failed")
+            task.rollback_hint = "generate"
+            task.current_state = TaskState.PATCH
+            return task
         ok_generate, generate_issues = _validate_generate_plan(gen_plan, planning_bundle.get("analysis_json", {}))
         record_trajectory_action("patch_validate", f"retry_generate_ok={ok_generate}; issues={generate_issues}")
 

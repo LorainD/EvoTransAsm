@@ -146,8 +146,10 @@ def _handle_plan_pipeline(task: TaskContext) -> TaskContext:
                 print("[pipeline] PLAN has no remaining group, moving to TASK_UPDATE")
                 task.current_state = TaskState.TASK_UPDATE
             return task
-    except Exception:
-        pass
+    except Exception as e:
+        # Do not silently fall back: PLAN load failures can drop progress.
+        print(f"[pipeline][WARN] 读取已有 PLAN 失败，将重建 fixed_plan: {e}")
+        record_trajectory_action("plan_warn", f"failed_to_load_existing_plan:{e}")
 
     symbol = task.target.symbol
 

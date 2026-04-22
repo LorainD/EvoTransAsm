@@ -14,7 +14,8 @@ from __future__ import annotations
 
 from typing import Callable
 
-from .task import TaskContext, TaskState
+from .task import TaskContext, TaskState, TaskStatus
+from .llm import record_trajectory_action
 
 HandlerFn = Callable[[TaskContext], TaskContext]
 
@@ -64,9 +65,16 @@ class StateMachine:
                 if state == TaskState.PATCH and hint == "generate":
                     print(f"[statemachine] controlled PATCH self-transition with rollback_hint={hint}.")
                     continue
-                print(f"[statemachine] handler for {state.value} did not "
-                      f"advance state, forcing DONE.")
-                self.task.current_state = TaskState.DONE
+                msg = f"handler_stall:{state.value}"
+                print(f"[statemachine][ERROR] handler for {state.value} did not advance state.")
+                record_trajectory_action("statemachine_error", msg)
+                # Fail-safe: surface as task-level failure instead of silent DONE.
+                try:
+                    self.task.task.status = TaskStatus.FAILED
+                except Exception:
+                    pass
+                # Prefer TASK_UPDATE so the pipeline can emit a report/summary.
+                self.task.current_state = TaskState.TASK_UPDATE
 
         # Final persist
         self.task.save()

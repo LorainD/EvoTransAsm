@@ -603,8 +603,10 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
                 print("\nPLAN 已无待处理 group，进入 TASK_UPDATE")
                 task.current_state = TaskState.TASK_UPDATE
             return task
-    except Exception:
-        pass
+    except Exception as e:
+        # Avoid silent fallback: corrupted/incompatible PLAN artifacts should be visible.
+        print(f"[PLAN][WARN] 读取已有 PLAN 失败，将重新生成: {e}")
+        record_trajectory_action("plan_warn", f"failed_to_load_existing_plan:{e}")
 
     discovered_functions: list[DiscoveredFunction] = []
     try:
