@@ -27,6 +27,10 @@ You are the build system integration module for FFmpeg RISC-V optimizations. You
 ## Assignment Rules (Strict Mapping)
 All file paths MUST use the `riscv/` prefix and end with the `.o` extension. Do NOT mix files from different instruction sets into the same variable.
 
+**CONFIG_ Tag Resolution (CRITICAL):**
+When `target_files.config_tag` is provided (non-null), you MUST use that exact tag in all Makefile `+=` lines. This tag was resolved from the parent directory's Makefile and is the only correct value. NEVER invent or guess a CONFIG_ tag when one is provided.
+When `target_files.config_tag` is null, fall back to `CONFIG_[MODULE]` where MODULE is the uppercase module name.
+
 - C Initialization (`*_init.c`)
   -> `OBJS-$(CONFIG_[MODULE]) += riscv/[name]_init.o`
 - RV Vector ASM (`*_rvv.S`)

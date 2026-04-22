@@ -402,6 +402,61 @@ def _check_makefile_has_module(path: Path, module: str) -> bool:
     return module.upper() in text.upper() and "_rvv" in text.lower()
 
 
+# Regex: matches lines like  OBJS-$(CONFIG_H264DSP) += h264dsp.o  (with flexible whitespace)
+_CONFIG_TAG_RE = re.compile(
+    r"^\s*\w*OBJS-\$\((CONFIG_[A-Z0-9_]+)\)\s*\+="
+)
+
+
+def lookup_config_tag(ffmpeg_root: Path, module: str, lib_root: str) -> str | None:
+    """Look up the correct CONFIG_ tag from the parent directory's Makefile.
+
+    Searches ``{lib_root}/Makefile`` (e.g. ``libavcodec/Makefile``) for an
+    OBJS line that compiles the module's C source, and extracts the
+    ``CONFIG_XXX`` variable from ``$(CONFIG_XXX)``.
+
+    This is the **only** correct data source for CONFIG_ tags — never invent
+    new tags.  For example, searching ``h264dsp.o`` yields ``CONFIG_H264DSP``.
+
+    Returns the tag string (e.g. ``"CONFIG_H264DSP"``) or ``None`` if the
+    parent Makefile doesn't exist or no matching line is found.
+    """
+    parent_makefile = ffmpeg_root / lib_root / "Makefile"
+    if not parent_makefile.exists():
+        return None
+
+    try:
+        text = parent_makefile.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+
+    mod = module.lower().rstrip("_")
+
+    # Build candidate .o names to search for, ordered from most specific to
+    # least specific so we prefer an exact match.
+    candidates = [
+        f"{mod}.o",
+        f"{mod}dsp.o",
+    ]
+
+    for line in text.splitlines():
+        line_lower = line.lower()
+        for cand in candidates:
+            if cand in line_lower:
+                m = _CONFIG_TAG_RE.match(line)
+                if m:
+                    return m.group(1)
+
+    # Broader fallback: any OBJS line whose .o list contains the module stem.
+    for line in text.splitlines():
+        if module.lower() in line.lower() and "+=" in line:
+            m = _CONFIG_TAG_RE.match(line)
+            if m:
+                return m.group(1)
+
+    return None
+
+
 def _infer_lib_root(module: str, selected_files: list[str], existing_rvv: list[str]) -> str:
     """Infer target lib root (libavcodec/libswscale/...) from selected references."""
     mod = (module or "").lower()
@@ -485,6 +540,9 @@ def _build_planning_bundle(task: TaskContext) -> dict:
     init_path = f"{lib_root}/riscv/{module}_init.c"
     makefile_path = f"{lib_root}/riscv/Makefile"
 
+    # Look up the authoritative CONFIG_ tag from the parent Makefile.
+    config_tag = lookup_config_tag(task.ffmpeg_root, module, lib_root)
+
     return {
         "analysis_json": analysis_json,
         "selected_files": selected_files,
@@ -497,6 +555,7 @@ def _build_planning_bundle(task: TaskContext) -> dict:
             "rvv": rvv_path,
             "init": init_path,
             "makefile": makefile_path,
+            "config_tag": config_tag,
             "rvv_exists": (task.ffmpeg_root / rvv_path).exists(),
             "init_exists": (task.ffmpeg_root / init_path).exists(),
             "makefile_exists": (task.ffmpeg_root / makefile_path).exists(),
