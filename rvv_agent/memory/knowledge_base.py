@@ -251,15 +251,20 @@ class KnowledgeBase:
         pattern_id = str(raw.get("pattern_id", ""))
         source = raw.get("source", {}) if isinstance(raw.get("source"), dict) else {}
 
+        legacy_math_expression = str(raw.get("math_expression", "") or "").strip()
+
         ir = raw.get("ir")
         if not isinstance(ir, dict):
             # migrate legacy semantic_ir/simd_strategy fields into canonical IR
             legacy_semantic = raw.get("semantic_ir", {}) if isinstance(raw.get("semantic_ir"), dict) else {}
             legacy_strategy = raw.get("simd_strategy", {}) if isinstance(raw.get("simd_strategy"), dict) else {}
+            if not legacy_math_expression:
+                legacy_math_expression = str(legacy_semantic.get("math_expression", "") or "").strip()
             ir = {
                 "computation": {
                     "type": str(legacy_semantic.get("algorithm_class", "unknown") or "unknown"),
                     "expression_tree": {"op": "unknown", "inputs": [], "params": {}},
+                    "math_expression": legacy_math_expression,
                 },
                 "memory": {
                     "access_pattern": str(legacy_semantic.get("memory_pattern", "contiguous") or "contiguous"),
@@ -276,6 +281,10 @@ class KnowledgeBase:
             }
         ir = normalize_ir(ir)
 
+        # Backfill math_expression from legacy top-level field when IR lacks it.
+        if legacy_math_expression and not str(ir.get("computation", {}).get("math_expression", "") or "").strip():
+            ir["computation"]["math_expression"] = legacy_math_expression
+
         simd_features = raw.get("simd_features", {}) if isinstance(raw.get("simd_features"), dict) else {}
         references = raw.get("references", {}) if isinstance(raw.get("references"), dict) else {}
         if not references and isinstance(raw.get("architecture"), dict):
@@ -285,6 +294,17 @@ class KnowledgeBase:
                 "arm": legacy_arch.get("neon", []) or legacy_arch.get("arm", []),
                 "riscv": legacy_arch.get("rvv", []),
             }
+
+        arch_exp = ir.get("experience", {}).get("arch_simd_experience", {})
+        if isinstance(arch_exp, dict):
+            if not arch_exp.get("x86") and isinstance(references.get("x86", []), list):
+                arch_exp["x86"] = [f"x86_ref:{str(x)}" for x in references.get("x86", [])[:5] if str(x).strip()]
+            if not arch_exp.get("arm") and isinstance(references.get("arm", []), list):
+                arm_items = [str(x) for x in references.get("arm", []) if str(x).strip()]
+                arch_exp["arm"] = [f"arm_ref:{x}" for x in arm_items[:5] if "/aarch64/" not in x.replace("\\", "/")]
+                if not arch_exp.get("aarch64"):
+                    arch_exp["aarch64"] = [f"aarch64_ref:{x}" for x in arm_items[:5] if "/aarch64/" in x.replace("\\", "/")]
+            ir["experience"]["arch_simd_experience"] = arch_exp
 
         meta = raw.get("meta", {}) if isinstance(raw.get("meta"), dict) else {}
         if not meta and isinstance(raw.get("metadata"), dict):

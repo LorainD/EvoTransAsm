@@ -23,12 +23,78 @@ from ..tool.interactive import prompt_yes_no
 # AnalysisResult = AnalysisArtifact
 
 
+def collect_arch_simd_experience(per_function_analysis: dict[str, FunctionAnalysis]) -> dict[str, list[str]]:
+    """Aggregate architecture-specific SIMD经验 from IR and refs."""
+    out: dict[str, list[str]] = {"x86": [], "arm": [], "aarch64": []}
+    seen: dict[str, set[str]] = {"x86": set(), "arm": set(), "aarch64": set()}
+
+    def _push(arch: str, value: object) -> None:
+        s = str(value).strip()
+        if not s or s in seen[arch]:
+            return
+        seen[arch].add(s)
+        out[arch].append(s)
+
+    for fa in per_function_analysis.values():
+        ir = normalize_ir(fa.ir)
+        exp = ir.get("experience", {}) if isinstance(ir.get("experience"), dict) else {}
+        arch_exp = exp.get("arch_simd_experience", {}) if isinstance(exp.get("arch_simd_experience"), dict) else {}
+
+        for arch in ("x86", "arm", "aarch64"):
+            for item in arch_exp.get(arch, []) if isinstance(arch_exp.get(arch), list) else []:
+                _push(arch, item)
+
+        for ref in fa.x86_refs:
+            _push("x86", f"x86_ref:{ref}")
+        for ref in fa.arm_refs:
+            r = str(ref)
+            target_arch = "aarch64" if "/aarch64/" in r.replace("\\", "/") else "arm"
+            _push(target_arch, f"{target_arch}_ref:{r}")
+
+    return out
+
+
+def _count_unknown_fields(ir: dict) -> tuple[int, int]:
+    comp = ir.get("computation", {}) if isinstance(ir.get("computation"), dict) else {}
+    mem = ir.get("memory", {}) if isinstance(ir.get("memory"), dict) else {}
+    par = ir.get("parallelism", {}) if isinstance(ir.get("parallelism"), dict) else {}
+
+    values: list[str] = [
+        str(comp.get("type", "")).strip(),
+        str(mem.get("access_pattern", "")).strip(),
+        str(mem.get("stride", "")).strip(),
+        str(mem.get("alignment", "")).strip(),
+        str(mem.get("layout", "")).strip(),
+        str(par.get("dependency", "")).strip(),
+        str(par.get("tail_policy", "")).strip(),
+    ]
+    math_expr = str(comp.get("math_expression", "")).strip()
+
+    total = len(values) + 1
+    unknown = 0
+    for v in values:
+        if not v or v.lower() == "unknown":
+            unknown += 1
+    if not math_expr or math_expr.lower() == "unknown":
+        unknown += 1
+    return unknown, total
+
+
+def _normalize_ir_from_data(data: dict) -> dict:
+    ir_payload = data.get("ir", {}) if isinstance(data.get("ir"), dict) else {}
+    if "experience" not in ir_payload and isinstance(data.get("experience"), dict):
+        ir_payload = {**ir_payload, "experience": data.get("experience")}
+    return normalize_ir(ir_payload)
+
+
 def collect_ir_summary(per_function_analysis: dict[str, FunctionAnalysis]) -> dict[str, object]:
     """Aggregate per-function IR into compact repo/group summary."""
     computation_types: list[str] = []
     memory_patterns: list[str] = []
     vectorizable_count = 0
     reduction_count = 0
+    unknown_field_count = 0
+    total_field_count = 0
 
     for fa in per_function_analysis.values():
         ir = normalize_ir(fa.ir)
@@ -42,12 +108,20 @@ def collect_ir_summary(per_function_analysis: dict[str, FunctionAnalysis]) -> di
             vectorizable_count += 1
         if bool(ir["parallelism"].get("reduction", False)):
             reduction_count += 1
+        u, t = _count_unknown_fields(ir)
+        unknown_field_count += u
+        total_field_count += t
+
+    arch_simd_experience = collect_arch_simd_experience(per_function_analysis)
 
     return {
         "computation_types": computation_types,
         "memory_patterns": memory_patterns,
         "vectorizable_count": vectorizable_count,
         "reduction_count": reduction_count,
+        "arch_simd_experience": arch_simd_experience,
+        "unknown_field_count": unknown_field_count,
+        "unknown_ratio": round((unknown_field_count / total_field_count), 4) if total_field_count > 0 else 0.0,
     }
 
 
@@ -130,9 +204,14 @@ def discover_functions(
 
 def _fallback_analysis(discovery: Discovery) -> dict:
     g = group_files(discovery)
+    ir = default_ir()
+    ir["computation"]["math_expression"] = "unresolved_from_fallback_context"
+    ir["experience"]["arch_simd_experience"]["x86"] = [f"x86_ref:{x}" for x in g["x86_refs"][:5]]
+    ir["experience"]["arch_simd_experience"]["arm"] = [f"arm_ref:{x}" for x in g["arm_refs"][:5]]
+    ir["experience"]["arch_simd_experience"]["aarch64"] = [f"aarch64_ref:{x}" for x in g["aarch64_refs"][:5]]
     return {
         "symbol": discovery.symbol,
-        "ir": default_ir(),
+        "ir": ir,
         "simd_features": {
             "has_saturation": False,
             "has_widening": False,
@@ -167,6 +246,23 @@ def _build_kb_match(kb: KnowledgeBase | None, ir: dict) -> tuple[list[str], dict
     }
     kb_patterns_list = [asdict(x["pattern"]) for x in ranked if x.get("pattern") is not None]
     return ids, kb_match, kb_patterns_list
+
+
+def _enrich_ir_experience_with_refs(ir: dict, x86_refs: list[str], arm_refs: list[str]) -> dict:
+    out = normalize_ir(ir)
+    arch_exp = out["experience"]["arch_simd_experience"]
+
+    if not arch_exp["x86"]:
+        arch_exp["x86"] = [f"x86_ref:{x}" for x in x86_refs[:5]]
+
+    if not arch_exp["arm"] and not arch_exp["aarch64"]:
+        for r in arm_refs[:8]:
+            rr = str(r)
+            if "/aarch64/" in rr.replace("\\", "/"):
+                arch_exp["aarch64"].append(f"aarch64_ref:{rr}")
+            else:
+                arch_exp["arm"].append(f"arm_ref:{rr}")
+    return out
 
 
 def analyze_with_llm(
@@ -210,7 +306,7 @@ def analyze_with_llm(
             data = extract_json_from_llm(raw)
             normalized = {
                 "symbol": discovery.symbol,
-                "ir": normalize_ir(data.get("ir", {})),
+                "ir": _normalize_ir_from_data(data),
                 "simd_features": data.get("simd_features", {}) if isinstance(data.get("simd_features"), dict) else {},
                 "references": data.get("references", {}) if isinstance(data.get("references"), dict) else {},
                 "notes": str(data.get("notes", "")),
@@ -286,7 +382,7 @@ def analyze_with_llm(
                 max_retries=3,
             )
             data = extract_json_from_llm(raw)
-            ir = normalize_ir(data.get("ir", {}))
+            ir = _normalize_ir_from_data(data)
             matched_ids, kb_match, ranked_patterns = _build_kb_match(kb, ir)
             if matched_ids:
                 kb_pattern_ids = matched_ids
@@ -297,6 +393,7 @@ def analyze_with_llm(
             c_refs = _to_ref_list(refs.get("c", []))
             x86_refs = _to_ref_list(refs.get("x86", []))
             arm_refs = _to_ref_list(refs.get("arm", []))
+            ir = _enrich_ir_experience_with_refs(ir, x86_refs, arm_refs)
 
             func_analysis = FunctionAnalysis(
                 function_name=func_name,

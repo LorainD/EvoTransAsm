@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..core.config import AppConfig, is_board_enabled
+from ..core.ir import default_ir
 from ..core.llm import (
     LlmMessage,
     chat_completion_with_retry,
@@ -1188,11 +1189,7 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
                 rep_ir = fobj.get("ir")
                 break
     if not isinstance(rep_ir, dict):
-        rep_ir = {
-            "computation": {"type": "unknown", "expression_tree": {"op": "unknown", "inputs": [], "params": {}}},
-            "memory": {"access_pattern": "contiguous", "stride": "none", "alignment": "unknown", "layout": "1D"},
-            "parallelism": {"vectorizable": False, "reduction": False, "dependency": "unknown", "tail_policy": "none"},
-        }
+        rep_ir = default_ir()
 
     rep_simd_features = {
         "has_saturation": False,

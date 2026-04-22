@@ -169,7 +169,8 @@ def analysis_prompt(
         "op": "...",
         "inputs": [ ... ],
         "params": {{ ... }}
-      }}
+      }},
+      "math_expression": "结构化数学伪公式，示例: sum_top = ReduceSum(vld(src - stride, vlen)); sum_left = ReduceSum(vld(src - 1, vlen)); avg = (sum_top + sum_left) >> 4; Broadcast(avg) to all 16x16 elements."
     }},
     "memory": {{
       "access_pattern": "contiguous|stride|gather|scatter",
@@ -182,6 +183,13 @@ def analysis_prompt(
       "reduction": true|false,
       "dependency": "none|loop_carried|unknown",
       "tail_policy": "none|required"
+    }},
+    "experience": {{
+      "arch_simd_experience": {{
+        "x86": ["从x86 SIMD实现抽取的可迁移经验", ...],
+        "arm": ["从ARM/NEON实现抽取的可迁移经验", ...],
+        "aarch64": ["从AArch64实现抽取的可迁移经验", ...]
+      }}
     }}
   }},
   "simd_features": {{
@@ -199,8 +207,10 @@ def analysis_prompt(
 }}
 
 规则：
-- expression_tree 必须是结构化 AST，禁止 math_expression 字符串；
+- expression_tree 必须是结构化 AST；math_expression 作为可读公式补充，不能替代 AST；
 - 所有语义必须通过 ir 三层表达，禁止输出 pattern 字段；
+- math_expression 必须给出可执行风格伪公式，禁止留空；
+- 默认禁止 unknown，除非源码信息确实不足；若使用 unknown，必须在 notes 中写明具体原因；
 - x86/arm 引用优先 .S/.asm 的实际 SIMD 实现。
 {prior_section}{errors_section}
 上下文（完整函数体，带行号）：
@@ -270,7 +280,8 @@ def function_analysis_prompt(
         "op": "...",
         "inputs": [ ... ],
         "params": {{ ... }}
-      }}
+      }},
+      "math_expression": "结构化数学伪公式，示例: sum_top = ReduceSum(vld(src - stride, vlen)); sum_left = ReduceSum(vld(src - 1, vlen)); avg = (sum_top + sum_left) >> 4; Broadcast(avg) to all 16x16 elements."
     }},
     "memory": {{
       "access_pattern": "contiguous|stride|gather|scatter",
@@ -283,6 +294,13 @@ def function_analysis_prompt(
       "reduction": true|false,
       "dependency": "none|loop_carried|unknown",
       "tail_policy": "none|required"
+    }},
+    "experience": {{
+      "arch_simd_experience": {{
+        "x86": ["从x86 SIMD实现抽取的可迁移经验", ...],
+        "arm": ["从ARM/NEON实现抽取的可迁移经验", ...],
+        "aarch64": ["从AArch64实现抽取的可迁移经验", ...]
+      }}
     }}
   }},
   "simd_features": {{
@@ -304,9 +322,11 @@ def function_analysis_prompt(
 }}
 
 规则：
-- expression_tree 必须是结构化 AST，禁止 math_expression 字符串；
+- expression_tree 必须是结构化 AST；math_expression 作为可读公式补充，不能替代 AST；
 - 所有语义必须通过 ir 三层表达，禁止输出 pattern 字段；
 - 至少返回 0~3 个最相似 KB pattern，并写明匹配依据；
+- math_expression 必须给出可执行风格伪公式，禁止留空；
+- 默认禁止 unknown，除非源码信息确实不足；若使用 unknown，必须在 notes 中写明具体原因；
 - x86/arm 引用优先 .S/.asm 的实际 SIMD 实现。
 {prior_section}{errors_section}{kb_section}
 上下文（完整函数体，带行号）：

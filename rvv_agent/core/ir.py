@@ -8,6 +8,7 @@ from typing import Any
 class ComputationIR:
     type: str = "unknown"
     expression_tree: dict[str, Any] = field(default_factory=lambda: {"op": "unknown", "inputs": [], "params": {}})
+    math_expression: str = ""
 
 
 @dataclass
@@ -27,10 +28,18 @@ class ParallelismIR:
 
 
 @dataclass
+class ExperienceIR:
+    arch_simd_experience: dict[str, list[str]] = field(
+        default_factory=lambda: {"x86": [], "arm": [], "aarch64": []}
+    )
+
+
+@dataclass
 class IR:
     computation: ComputationIR = field(default_factory=ComputationIR)
     memory: MemoryIR = field(default_factory=MemoryIR)
     parallelism: ParallelismIR = field(default_factory=ParallelismIR)
+    experience: ExperienceIR = field(default_factory=ExperienceIR)
 
 
 def default_ir() -> dict[str, Any]:
@@ -54,6 +63,7 @@ def normalize_ir(value: Any) -> dict[str, Any]:
     comp = value.get("computation", {}) if isinstance(value.get("computation"), dict) else {}
     mem = value.get("memory", {}) if isinstance(value.get("memory"), dict) else {}
     par = value.get("parallelism", {}) if isinstance(value.get("parallelism"), dict) else {}
+    exp = value.get("experience", {}) if isinstance(value.get("experience"), dict) else {}
 
     expression_tree = comp.get("expression_tree", {})
     if not isinstance(expression_tree, dict):
@@ -67,6 +77,7 @@ def normalize_ir(value: Any) -> dict[str, Any]:
     base["computation"] = {
         "type": str(comp.get("type", "unknown") or "unknown"),
         "expression_tree": expression_tree,
+        "math_expression": str(comp.get("math_expression", "") or ""),
     }
     base["memory"] = {
         "access_pattern": str(mem.get("access_pattern", "contiguous") or "contiguous"),
@@ -79,6 +90,27 @@ def normalize_ir(value: Any) -> dict[str, Any]:
         "reduction": _normalize_bool(par.get("reduction", False), default=False),
         "dependency": str(par.get("dependency", "unknown") or "unknown"),
         "tail_policy": str(par.get("tail_policy", "none") or "none"),
+    }
+
+    raw_arch = exp.get("arch_simd_experience", {}) if isinstance(exp.get("arch_simd_experience"), dict) else {}
+
+    def _norm_list(k: str) -> list[str]:
+        v = raw_arch.get(k, [])
+        if not isinstance(v, list):
+            return []
+        out: list[str] = []
+        for item in v:
+            s = str(item).strip()
+            if s:
+                out.append(s)
+        return out
+
+    base["experience"] = {
+        "arch_simd_experience": {
+            "x86": _norm_list("x86"),
+            "arm": _norm_list("arm"),
+            "aarch64": _norm_list("aarch64"),
+        }
     }
     return base
 
