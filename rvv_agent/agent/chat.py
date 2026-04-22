@@ -328,7 +328,7 @@ def handle_analyze(task: TaskContext) -> TaskContext:
     current_group_idx = plan_data.current_group_idx
     if current_group_idx >= len(plan_data.groups):
         print("所有 group 已处理，迁移完成")
-        task.current_state = TaskState.TASK_UPDATE
+        task.current_state = TaskState.KB_UPDATE
         return task
 
     current_group = plan_data.groups[current_group_idx]
@@ -600,8 +600,8 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
                 )
                 task.current_state = TaskState.ANALYZE
             else:
-                print("\nPLAN 已无待处理 group，进入 TASK_UPDATE")
-                task.current_state = TaskState.TASK_UPDATE
+                print("\nPLAN 已无待处理 group，进入 KB_UPDATE")
+                task.current_state = TaskState.KB_UPDATE
             return task
     except Exception as e:
         # Avoid silent fallback: corrupted/incompatible PLAN artifacts should be visible.
@@ -786,7 +786,7 @@ def handle_build(task: TaskContext) -> TaskContext:
 
     if not exec_ok:
         print("跳过构建阶段。")
-        task.current_state = TaskState.TASK_UPDATE
+        task.current_state = TaskState.KB_UPDATE
         return task
 
     ensure_dir(build_dir)
@@ -1131,28 +1131,40 @@ def handle_test(task: TaskContext) -> TaskContext:
     return task
 
 
-def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskContext:
-    """KB_UPDATE handler: extract patterns from successful migration, advance to next group."""
-    if kb is None:
-        task.save_artifact("KB_UPDATE", KBUpdateArtifact())
-        # Advance to next group
-        try:
-            plan_data = load_plan_artifact(task.load_artifact("PLAN"))
-            plan_data.completed_groups.append(plan_data.groups[plan_data.current_group_idx].group_id)
-            plan_data.current_group_idx += 1
-            task.save_artifact("PLAN", plan_data)
-            task.artifacts.group_iteration_count = 0
-            task.artifacts.prebuild_generate_retries = 0
-            task.artifacts.active_group_id = ""
-            if plan_data.current_group_idx < len(plan_data.groups):
-                task.current_state = TaskState.ANALYZE
-            else:
-                task.current_state = TaskState.TASK_UPDATE
-        except Exception:
-            task.current_state = TaskState.TASK_UPDATE
-        return task
+def _evaluate_kb_outcome(task: TaskContext) -> tuple[bool, str, str]:
+    """Evaluate success from latest BUILD/TEST artifacts for KB 分流。"""
+    build_status = "missing"
+    test_status = "not_required"
 
-    # Load analysis and file-search for richer extraction
+    build_ok = False
+    if task.artifacts.build_run_ids:
+        try:
+            latest_build = task.load_artifact("BUILD", sub_id=task.artifacts.build_run_ids[-1])
+            exitcode = int(latest_build.get("exitcode", -1))
+            success_flag = bool(latest_build.get("success", False))
+            err_type = str(latest_build.get("error_type", "") or "")
+            build_ok = (success_flag or exitcode == 0) and err_type != "rvv_missing"
+            build_status = "success" if build_ok else f"failed:{err_type or f'rc={exitcode}'}"
+        except Exception as e:
+            build_status = f"failed:artifact_error:{e}"
+    else:
+        build_status = "missing"
+
+    test_ok = True
+    if is_board_enabled(task.cfg):
+        try:
+            test_artifact = task.load_artifact("TEST")
+            test_status = str(test_artifact.get("status", "") or "missing")
+            test_ok = test_status == "success"
+        except Exception:
+            test_status = "missing"
+            test_ok = False
+
+    return build_ok and test_ok, build_status, test_status
+
+
+def _extract_success_patterns(task: TaskContext, kb: KnowledgeBase) -> tuple[list[dict], list[dict]]:
+    """Successful migration path: extract Pattern + supplemental ErrorRecord."""
     try:
         analysis = task.load_artifact("ANALYZE")
     except Exception:
@@ -1167,21 +1179,18 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
     selected_files = file_search.get("selected_files", [])
     symbol = task.target.symbol
 
-    # Build references from file presence
     references: dict[str, list[str]] = {"x86": [], "arm": [], "riscv": []}
     for f in selected_files:
-        fl = f.lower()
+        fl = str(f).lower()
         if "/x86/" in fl or "_sse" in fl or "_avx" in fl:
-            references.setdefault("x86", []).append(f)
+            references.setdefault("x86", []).append(str(f))
         elif "/aarch64/" in fl or "/arm/" in fl or "_neon" in fl:
-            references.setdefault("arm", []).append(f)
+            references.setdefault("arm", []).append(str(f))
         elif "/riscv/" in fl or "_rvv" in fl:
-            references.setdefault("riscv", []).append(f)
+            references.setdefault("riscv", []).append(str(f))
 
-    # Build source field with c_paths
-    c_paths = [f for f in selected_files if f.endswith((".c", ".h"))]
+    c_paths = [str(f) for f in selected_files if str(f).endswith((".c", ".h"))]
 
-    # Extract representative IR from current group migratable function.
     rep_ir = None
     migratable = analysis_json.get("migratable_functions", []) if isinstance(analysis_json, dict) else []
     if isinstance(migratable, list):
@@ -1205,7 +1214,6 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
                 rep_simd_features = fobj.get("simd_features")
                 break
 
-    # Collect debug trajectory and final patch snippet for reflection.
     debug_history_parts: list[str] = []
     for debug_run_id in task.artifacts.debug_run_ids:
         try:
@@ -1234,8 +1242,6 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
             final_code_str = ""
 
     extracted_notes = f"Auto-extracted from migration of {symbol}"
-
-    # Create a pattern from this successful migration
     new_pattern = Pattern(
         pattern_id=f"{symbol}_{task.task_id}",
         source={"symbol": symbol, "c_paths": c_paths},
@@ -1246,15 +1252,12 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
         notes=extracted_notes,
     )
 
-    # Update weight for any patterns that were used during PLAN/PATCH
-    # (build succeeded if we reached KB_UPDATE)
     ranked = kb.match_patterns_by_ir(rep_ir, max_results=5)
     for item in ranked:
         pid = str(item.get("pattern_id", ""))
         if pid and pid != new_pattern.pattern_id:
             kb.update_weight(pid, success=True)
 
-    # First try trajectory reflection to distill reusable experience.
     new_errors: list[dict] = []
     if debug_history_parts and task.cfg:
         print("\n[KB_UPDATE] 正在通过 LLM 提炼轨迹与排错经验...")
@@ -1272,7 +1275,8 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
                 if isinstance(first_pattern, dict):
                     extracted_notes = str(first_pattern.get("notes", "") or "").strip() or extracted_notes
 
-            for err in reflection_data.get("error_diagnostics", []) if isinstance(reflection_data.get("error_diagnostics", []), list) else []:
+            candidates = reflection_data.get("error_diagnostics", [])
+            for err in candidates if isinstance(candidates, list) else []:
                 if not isinstance(err, dict):
                     continue
                 err_class = str(err.get("error_class", "") or "").strip() or "unknown"
@@ -1292,7 +1296,6 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
         except Exception as e:
             print(f"[KB_UPDATE] 轨迹提炼失败，降级为结构化 DEBUG 写入: {e}")
 
-    # Fallback or supplement: record DEBUG-stage errors using structured artifacts.
     if not new_errors:
         seen_error_keys: set[tuple[str, str]] = set()
         for debug_run_id in task.artifacts.debug_run_ids:
@@ -1300,14 +1303,12 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
                 dbg = task.load_artifact("DEBUG", sub_id=debug_run_id)
             except Exception:
                 continue
-
             if not isinstance(dbg, dict):
                 continue
 
             error_text = str(dbg.get("error_text", "") or "").strip()
             if not error_text:
                 continue
-
             err_class_name = str(dbg.get("error_note", "") or "").strip() or "unknown"
 
             fix_actions = dbg.get("fix_actions", []) if isinstance(dbg.get("fix_actions", []), list) else []
@@ -1318,7 +1319,7 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
             elif llm_suggestion:
                 fix_strategy = llm_suggestion[:300]
             else:
-                fix_strategy = "auto-fixed during migration"
+                fix_strategy = "需人工复盘该错误根因"
 
             pattern_text = error_text[:200]
             key = (err_class_name, pattern_text)
@@ -1341,31 +1342,148 @@ def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> Task
                 }
             )
 
-    # Finalize notes after reflection/fallback and save pattern.
     new_pattern.notes = extracted_notes
     kb.add_pattern(new_pattern)
+    return [{"pattern_id": new_pattern.pattern_id, "symbol": symbol}], new_errors
 
-    artifact = KBUpdateArtifact(
-        new_patterns=[{"pattern_id": new_pattern.pattern_id, "symbol": symbol}],
-        new_errors=new_errors,
-    )
+
+def _extract_failure_lessons(task: TaskContext, kb: KnowledgeBase) -> list[dict]:
+    """Failed task path: post-mortem -> ErrorRecord."""
+    fatal_error = ""
+    if task.all_build_errors:
+        fatal_error = str(task.all_build_errors[-1])[:2000]
+
+    if not fatal_error and task.artifacts.build_run_ids:
+        try:
+            latest_build = task.load_artifact("BUILD", sub_id=task.artifacts.build_run_ids[-1])
+            fatal_error = extract_build_errors(
+                str(latest_build.get("stdout", "")) + "\n" + str(latest_build.get("stderr", ""))
+            )[:2000]
+        except Exception:
+            fatal_error = ""
+
+    if not fatal_error:
+        return []
+
+    debug_history = ""
+    for did in task.artifacts.debug_run_ids[-2:]:
+        try:
+            art = task.load_artifact("DEBUG", sub_id=did)
+            debug_history += f"- 尝试了：{art.get('fix_actions', [])}\\n"
+        except Exception:
+            pass
+
+    prompt = f"""
+你是一个底层的 RVV 汇编迁移专家。
+刚才我们尝试迁移函数 `{task.target.symbol}`，但最终彻底失败了。
+
+【最终致命报错日志】：
+{fatal_error}
+
+【我们尝试过但无济于事的修复方案】：
+{debug_history}
+
+为了避免未来的自动化系统在遇到同样的报错时重蹈覆辙，请你总结一条高价值的防坑经验。
+要求：
+1. 不要输出无意义内容。
+2. 深刻指出导致该报错的根本原因（Root Cause）。
+3. 明确指出哪些思路是死胡同。
+
+请严格输出以下 JSON 格式：
+{{
+  "error_class": "compile_error | link_error | runtime_error | test_mismatch",
+  "pattern": "提取报错日志中最核心的 1-2 句特征（不要包含具体临时文件路径）",
+  "fix_strategy": "用一两句话总结根本原因和未来遇到此问题的排查方向"
+}}
+""".strip()
+
+    messages = [
+        LlmMessage(role="system", content=system_prompt()),
+        LlmMessage(role="user", content=prompt),
+    ]
+
+    try:
+        raw = chat_completion_with_retry(task.cfg.llm, messages, stage="kb_post_mortem", max_tokens=500, max_retries=2)
+        data = extract_json_from_llm(raw)
+        pattern_text = str(data.get("pattern", "") or "").strip()
+        fix_strategy = str(data.get("fix_strategy", "") or "").strip()
+        if not pattern_text or not fix_strategy:
+            return []
+
+        err_class = str(data.get("error_class", "") or "").strip() or "compile_error"
+        record = ErrorRecord(
+            error_class=err_class,
+            pattern=pattern_text[:200],
+            fix_strategy=f"[事后复盘总结] {fix_strategy[:400]}",
+            example=fatal_error[:500],
+            count=1,
+        )
+        kb.add_error(record, cfg=task.cfg)
+        print(f"[KB_UPDATE] 成功提取避坑指南: {fix_strategy[:80]}")
+        return [{"error_class": err_class, "pattern": pattern_text[:200], "fix_strategy": record.fix_strategy}]
+    except Exception as e:
+        print(f"[KB_UPDATE] 事后复盘提取失败: {e}")
+        return []
+
+
+def handle_kb_update(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskContext:
+    """KB_UPDATE handler: success/failed 分流，并在收尾前沉淀知识。"""
+    print("\n[KB_UPDATE] 正在进行经验总结与知识库沉淀...")
+
+    if kb is None:
+        task.save_artifact("KB_UPDATE", KBUpdateArtifact())
+        task.current_state = TaskState.TASK_UPDATE
+        return task
+
+    is_success, build_status, test_status = _evaluate_kb_outcome(task)
+    new_patterns: list[dict] = []
+    new_errors: list[dict] = []
+
+    if is_success:
+        print("[KB_UPDATE] 任务成功，提取成功迁移 Pattern 与 IR...")
+        new_patterns, new_errors = _extract_success_patterns(task, kb)
+    else:
+        print(f"[KB_UPDATE] 任务失败，启动事后复盘 (build={build_status}, test={test_status})...")
+        new_errors = _extract_failure_lessons(task, kb)
+
+    artifact = KBUpdateArtifact(new_patterns=new_patterns, new_errors=new_errors)
     task.save_artifact("KB_UPDATE", artifact)
-    record_trajectory_action("kb_update", f"KB updated: 1 pattern, {len(new_errors)} errors")
+    record_trajectory_action(
+        "kb_update",
+        f"KB updated: success={is_success}, patterns={len(new_patterns)}, errors={len(new_errors)}",
+    )
 
-    # Advance to next group
+    if not is_success:
+        task.current_state = TaskState.TASK_UPDATE
+        return task
+
+    # 成功时按 group 推进；无后续 group 时再进入 TASK_UPDATE。
     try:
         plan_data = load_plan_artifact(task.load_artifact("PLAN"))
-        plan_data.completed_groups.append(plan_data.groups[plan_data.current_group_idx].group_id)
-        plan_data.current_group_idx += 1
+        current_group_id = ""
+        if plan_data.current_group_idx < len(plan_data.groups):
+            current_group_id = plan_data.groups[plan_data.current_group_idx].group_id
+            if current_group_id and current_group_id not in plan_data.completed_groups:
+                plan_data.completed_groups.append(current_group_id)
+
+        blocked = set(plan_data.completed_groups) | set(plan_data.failed_groups)
+        next_idx = None
+        for idx, group in enumerate(plan_data.groups):
+            if group.group_id not in blocked:
+                next_idx = idx
+                break
+
+        if next_idx is None:
+            task.save_artifact("PLAN", plan_data)
+            task.current_state = TaskState.TASK_UPDATE
+            return task
+
+        plan_data.current_group_idx = next_idx
         task.save_artifact("PLAN", plan_data)
         task.artifacts.group_iteration_count = 0
         task.artifacts.prebuild_generate_retries = 0
         task.artifacts.active_group_id = ""
-
-        if plan_data.current_group_idx < len(plan_data.groups):
-            task.current_state = TaskState.ANALYZE
-        else:
-            task.current_state = TaskState.TASK_UPDATE
+        task.current_state = TaskState.ANALYZE
     except Exception:
         task.current_state = TaskState.TASK_UPDATE
 

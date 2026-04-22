@@ -143,8 +143,8 @@ def _handle_plan_pipeline(task: TaskContext) -> TaskContext:
                 )
                 task.current_state = TaskState.ANALYZE
             else:
-                print("[pipeline] PLAN has no remaining group, moving to TASK_UPDATE")
-                task.current_state = TaskState.TASK_UPDATE
+                print("[pipeline] PLAN has no remaining group, moving to KB_UPDATE")
+                task.current_state = TaskState.KB_UPDATE
             return task
     except Exception as e:
         # Do not silently fall back: PLAN load failures can drop progress.
@@ -184,7 +184,7 @@ def _handle_build_pipeline(task: TaskContext) -> TaskContext:
     """BUILD: configure + make checkasm, no user prompts."""
     if not task.cfg.human.exec_ok:
         print("[pipeline] 跳过构建（--exec 未指定）")
-        task.current_state = TaskState.TASK_UPDATE
+        task.current_state = TaskState.KB_UPDATE
         return task
 
     ffmpeg_root = task.ffmpeg_root

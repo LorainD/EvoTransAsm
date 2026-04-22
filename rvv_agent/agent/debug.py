@@ -151,15 +151,15 @@ _MAX_PREBUILD_PATCH_RETRIES = 3
 
 
 def _move_to_next_group_or_finish(task: TaskContext) -> TaskContext:
-    """Mark current group failed and return PLAN or TASK_UPDATE."""
+    """Mark current group failed and return PLAN or KB_UPDATE."""
     try:
         plan_data = load_plan_artifact(task.load_artifact("PLAN"))
     except Exception:
-        task.current_state = TaskState.TASK_UPDATE
+        task.current_state = TaskState.KB_UPDATE
         return task
 
     if not plan_data.groups:
-        task.current_state = TaskState.TASK_UPDATE
+        task.current_state = TaskState.KB_UPDATE
         return task
 
     current_group_id = ""
@@ -186,7 +186,7 @@ def _move_to_next_group_or_finish(task: TaskContext) -> TaskContext:
 
     if next_idx is None:
         task.save_artifact("PLAN", plan_data)
-        task.current_state = TaskState.TASK_UPDATE
+        task.current_state = TaskState.KB_UPDATE
         return task
 
     plan_data.current_group_idx = next_idx
@@ -294,8 +294,8 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
             )
             print("[DEBUG] Detected rvv_missing semantic failure, forcing PATCH retry")
         else:
-            print("[DEBUG] No errors found in build output, moving to TASK_UPDATE")
-            task.current_state = TaskState.TASK_UPDATE
+            print("[DEBUG] No errors found in build output, moving to KB_UPDATE")
+            task.current_state = TaskState.KB_UPDATE
             return task
 
     # Derive a stage-level default error_class from where the failure surfaced.
