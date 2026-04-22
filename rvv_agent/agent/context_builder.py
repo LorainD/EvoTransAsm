@@ -155,7 +155,7 @@ class ContextBuilder:
             "function_analysis": scoped_map,
             "symbol": analysis.get("symbol", "") if isinstance(analysis, dict) else "",
         }
-
+#TODO：添加harness的内容和kb中的知识总结
     def build_plan_prompt_context(self) -> PlanPromptContext:
         """Build PLAN prompt context from SEARCH_FILE artifact.
 

@@ -466,7 +466,7 @@ def plan_prompt(
 - 如果某函数明显更复杂，应该放在更后。
 - 如果生成了新的必要文件，需要更改makefile，针对makefile的修改只能添加，不能删除已有内容。
 - 若参考文件中出现 "[existing-rvv] libavcodec/riscv/..._rvv.S" 或 "[existing-rvv] ..._init.c"，
-  计划应明确优先在现有 RVV 文件上 append/增量扩展，而不是重复创建新的 .S 文件。
+  计划应明确优先在现有 RVV 文件上 append/增量扩展，而不是重复创建新的 .S 文件，同时可以考虑不需要修改makefile和源文件riscv入口。
 - 输出严格 JSON（不要额外文字）。
 
 输出格式：
@@ -650,7 +650,7 @@ def function_discovery_prompt(symbol: str, code_context: str) -> str:
 目标模块/算子: {symbol}
 
 ## 任务
-分析下面的代码上下文，找出所有属于 {symbol} 模块且适合迁移到 RVV (RISC-V Vector) 的 C 函数。
+分析下面的代码上下文，找出所有属于 {symbol} 算子且适合迁移到 RVV (RISC-V Vector) 的 C 函数。函数名应与{symbol}相关
 
 ## 提取规则与约束（CRITICAL）
 1. 你的目标是提取需要被翻译为 RISC-V Vector (RVV) 的核心 C 语言标量函数。
@@ -673,6 +673,7 @@ def function_discovery_prompt(symbol: str, code_context: str) -> str:
 - 如果多个函数语义相近、可共享向量化模板，请在 semantic_hint 中说明 similar
 - 如果函数依赖另一个函数才能完整落地，请把被依赖函数放到 dependencies
 - 如果函数明显更复杂，请在 semantic_hint 中说明 hard/complex
+- 不要有重复的函数，同名函数请去重
 
 对每个发现的函数，输出：
 - name: 函数名（如 ff_sbr_neg_odd_64）
