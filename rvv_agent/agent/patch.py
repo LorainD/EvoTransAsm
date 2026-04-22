@@ -237,6 +237,70 @@ def rollback_group_applies(task: TaskContext, group_id: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Group-advance helper (avoid PLAN<->PATCH infinite loops)
+# ---------------------------------------------------------------------------
+
+def _move_to_next_group_or_finish(task: TaskContext, *, outcome: str = "failed") -> TaskContext:
+    """Advance PLAN group index, marking current group completed/failed.
+
+    This mirrors DEBUG's group-advance behavior to prevent state-machine loops
+    where PATCH sets current_state=PLAN but doesn't advance current_group_idx.
+    """
+    try:
+        plan_data = load_plan_artifact(task.load_artifact("PLAN"))
+    except Exception:
+        task.current_state = TaskState.TASK_UPDATE
+        return task
+
+    if not plan_data.groups:
+        task.current_state = TaskState.TASK_UPDATE
+        return task
+
+    outcome = (outcome or "failed").strip().lower()
+    if outcome not in {"failed", "completed", "skipped"}:
+        outcome = "failed"
+
+    current_group_id = ""
+    if 0 <= int(plan_data.current_group_idx) < len(plan_data.groups):
+        gid = plan_data.groups[int(plan_data.current_group_idx)].group_id
+        current_group_id = gid or ""
+        if current_group_id:
+            if outcome == "failed":
+                if current_group_id not in plan_data.failed_groups:
+                    plan_data.failed_groups.append(current_group_id)
+            else:
+                if current_group_id not in plan_data.completed_groups:
+                    plan_data.completed_groups.append(current_group_id)
+
+    # Best-effort rollback group changes before moving on (same as DEBUG).
+    if current_group_id:
+        try:
+            rollback_group_applies(task, current_group_id)
+        except Exception as e:  # noqa: BLE001
+            print(f"[PATCH][WARN] 跳组前回滚失败(group_id={current_group_id}): {e}")
+
+    blocked = set(plan_data.completed_groups) | set(plan_data.failed_groups)
+    next_idx: int | None = None
+    for idx, group in enumerate(plan_data.groups):
+        if group.group_id not in blocked:
+            next_idx = idx
+            break
+
+    if next_idx is None:
+        task.save_artifact("PLAN", plan_data)
+        task.current_state = TaskState.TASK_UPDATE
+        return task
+
+    plan_data.current_group_idx = next_idx
+    task.save_artifact("PLAN", plan_data)
+    task.artifacts.group_iteration_count = 0
+    task.artifacts.prebuild_generate_retries = 0
+    task.artifacts.active_group_id = ""
+    task.current_state = TaskState.PLAN
+    return task
+
+
+# ---------------------------------------------------------------------------
 # Tool-use helpers (first batch of tools for PATCH/BUILD/ROLLBACK)
 # ---------------------------------------------------------------------------
 
@@ -1101,24 +1165,10 @@ def generate_code(task: TaskContext,
         return data
     except (LlmError, Exception) as e: #TODO：错误处理应该是重连而不是直接使用placeholder
         print(f"[patch] generate failed: {e}")
-        if not prompt_yes_no("PATCH 代码生成失败，是否使用 placeholder 继续？", default=False):
-            raise
-        print("[patch] 使用 placeholder 继续")
-        return _normalize_generate_plan({
-            "generate_plan": {"patches": [{
-                "target_path": f"libavcodec/riscv/{task.target.module}_rvv.S",
-                "action": "create",
-                "content": (
-                    f"/* TODO: placeholder (LLM failed: {e}) */\n"
-                    ".text\n.align 2\n"
-                    f".globl {task.target.symbol}\n"
-                    f".type {task.target.symbol}, @function\n"
-                    f"{task.target.symbol}:\n\tret\n"
-                ),
-                "anchor_hint": "",
-                "description": "placeholder",
-            }]}
-        })
+        # Pipeline safety: never raise from PATCH generation.
+        # Return an empty plan so run_patch_stage can handle it via validation/retry.
+        record_trajectory_action("patch_generate_error", f"LLM generate failed: {str(e)[:200]}")
+        return {"generated": []}
 
 
 # ---------------------------------------------------------------------------
@@ -1308,8 +1358,7 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
         migratable = [str(x) for x in az.get("migratable_functions", [])] if isinstance(az, dict) else []
         if isinstance(az, dict) and "migratable_functions" in az and not migratable:
             print("[PATCH] 当前组无待迁移函数，跳过 PATCH，回到 PLAN")
-            task.current_state = TaskState.PLAN
-            return task
+            return _move_to_next_group_or_finish(task, outcome="completed")
     except Exception:
         pass
 
@@ -1377,8 +1426,7 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
 
         if task.artifacts.prebuild_generate_retries >= _MAX_PREBUILD_PATCH_RETRIES:
             print(f"[PATCH] 当前 group 预构建重试已达上限({_MAX_PREBUILD_PATCH_RETRIES})，回到 PLAN")
-            task.current_state = TaskState.PLAN
-            return task
+            return _move_to_next_group_or_finish(task, outcome="failed")
 
         task.rollback_hint = "generate"
         task.current_state = TaskState.PATCH
@@ -1409,16 +1457,14 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
         task.artifacts.prebuild_generate_retries += 1
         if task.artifacts.prebuild_generate_retries >= _MAX_PREBUILD_PATCH_RETRIES:
             print(f"[PATCH] apply 失败重试已达上限({_MAX_PREBUILD_PATCH_RETRIES})，回到 PLAN")
-            task.current_state = TaskState.PLAN
-            return task
+            return _move_to_next_group_or_finish(task, outcome="failed")
         if not task.rollback_hint:
             task.rollback_hint = "generate"
         task.current_state = TaskState.PATCH
         return task
 
     if next_state == TaskState.PLAN:
-        task.current_state = TaskState.PLAN
-        return task
+        return _move_to_next_group_or_finish(task, outcome="failed")
 
     task.current_state = TaskState.DEBUG
     return task
@@ -1537,16 +1583,14 @@ def run_patch_stage_tools(task: TaskContext, kb_patterns: list[dict] | None = No
         task.artifacts.prebuild_generate_retries += 1
         if task.artifacts.prebuild_generate_retries >= _MAX_PREBUILD_PATCH_RETRIES:
             print(f"[PATCH] apply 失败重试已达上限({_MAX_PREBUILD_PATCH_RETRIES})，回到 PLAN")
-            task.current_state = TaskState.PLAN
-            return task
+            return _move_to_next_group_or_finish(task, outcome="failed")
         if not task.rollback_hint:
             task.rollback_hint = "generate"
         task.current_state = TaskState.PATCH
         return task
 
     if next_state == TaskState.PLAN:
-        task.current_state = TaskState.PLAN
-        return task
+        return _move_to_next_group_or_finish(task, outcome="failed")
 
     task.current_state = TaskState.DEBUG
     return task

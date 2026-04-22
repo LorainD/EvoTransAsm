@@ -258,6 +258,10 @@ def llm_plan(
 ) -> PlanArtifact:
     """调用 LLM 生成针对 symbol 的迁移计划，失败时回退到 fixed_plan。"""
     discovered = list(functions or [])
+    # Short-circuit: no discovered functions => do not call LLM.
+    # Avoid wasting tokens and hallucination risk on empty context.
+    if not discovered:
+        return fixed_plan(symbol, discovered)
     prompt_functions = [asdict(f) for f in discovered]
     messages = [
         LlmMessage(role="system", content=system_prompt()),
@@ -280,9 +284,8 @@ def llm_plan(
         return _validate_or_rebuild_plan(artifact, discovered, symbol)
     except (LlmError, Exception) as e:
         print(f"[PLAN] LLM 生成计划失败: {e}")
-        if prompt_yes_no("是否使用 fixed_plan 继续？", default=False):
-            return fixed_plan(symbol, discovered)
-        raise RuntimeError("PLAN generation cancelled by user") from e
+        # Non-interactive pipeline safety: always fall back instead of prompting/raising.
+        return fixed_plan(symbol, discovered)
 
 
 def _print_plan_groups(plan: PlanArtifact) -> None:
@@ -340,7 +343,18 @@ def _llm_refine_plan(
     new_groups: list[FunctionGroup] = []
     order = 1
     for group_data in data.get("groups", []):
-        func_names = [str(n) for n in group_data.get("functions", []) if str(n) in function_map]
+        raw_funcs = group_data.get("functions", [])
+        if not isinstance(raw_funcs, list):
+            raw_funcs = []
+        # Accept both ["func_a"] and [{"name": "func_a"}] shapes.
+        func_names = []
+        for n in raw_funcs:
+            if isinstance(n, dict):
+                name = str(n.get("name", "") or "").strip()
+            else:
+                name = str(n or "").strip()
+            if name and name in function_map:
+                func_names.append(name)
         if not func_names:
             continue
         group_functions = [function_map[name] for name in func_names]
