@@ -31,6 +31,7 @@ from ..core.task import (
     PatchArtifact,
     TaskContext,
     TaskState,
+    load_reference_code_artifact,
     load_plan_artifact,
 )
 from ..core.util import ensure_dir, now_id, write_json, write_text, extract_build_errors, fmt_argv
@@ -401,12 +402,38 @@ def _check_makefile_has_module(path: Path, module: str) -> bool:
     return module.upper() in text.upper() and "_rvv" in text.lower()
 
 
-def _check_source_has_riscv_decl(ffmpeg_root: Path, module: str) -> bool:
+def _infer_lib_root(module: str, selected_files: list[str], existing_rvv: list[str]) -> str:
+    """Infer target lib root (libavcodec/libswscale/...) from selected references."""
+    mod = (module or "").lower()
+    candidates = [str(p or "") for p in (existing_rvv or [])] + [str(p or "") for p in (selected_files or [])]
+
+    for rel in candidates:
+        p = rel.replace("\\", "/")
+        parts = p.split("/")
+        if len(parts) < 3:
+            continue
+        if not parts[0].startswith("lib"):
+            continue
+        if parts[1] != "riscv":
+            continue
+        if mod and mod in parts[-1].lower():
+            return parts[0]
+
+    for rel in candidates:
+        p = rel.replace("\\", "/")
+        parts = p.split("/")
+        if len(parts) >= 3 and parts[0].startswith("lib") and parts[1] == "riscv":
+            return parts[0]
+
+    return "libavcodec"
+
+
+def _check_source_has_riscv_decl(ffmpeg_root: Path, module: str, lib_root: str) -> bool:
     """Check source C files for #if ARCH_RISCV declaration block."""
     candidates = [
-        f"libavcodec/{module}dsp_init.c",
-        f"libavcodec/{module}.c",
-        f"libavcodec/{module}dsp.c",
+        f"{lib_root}/{module}dsp_init.c",
+        f"{lib_root}/{module}.c",
+        f"{lib_root}/{module}dsp.c",
     ]
     for rel in candidates:
         src = ffmpeg_root / rel
@@ -421,28 +448,52 @@ def _check_source_has_riscv_decl(ffmpeg_root: Path, module: str) -> bool:
 def _build_planning_bundle(task: TaskContext) -> dict:
     """Build a shared context bundle for PATCH generation and retries."""
     file_search = task.load_artifact("SEARCH_FILE")
-    if task.artifacts.reference_code_ids:
-        sub = task.artifacts.reference_code_ids[-1].split("/", 1)[-1]
-        reference = task.load_artifact("BUILD_REFERENCE", sub_id=sub)
-    else:
-        reference = task.load_artifact("BUILD_REFERENCE")
+    reference = load_reference_code_artifact(task.load_artifact("BUILD_REFERENCE"))
 
     analysis_json = _build_group_scoped_analysis(task)
+    selected_files = file_search.get("selected_files", [])
+    existing_rvv = list(reference.existing_rvv or [])
+
+    grouped_functions = analysis_json.get("all_group_functions", []) if isinstance(analysis_json, dict) else []
+    if not isinstance(grouped_functions, list):
+        grouped_functions = []
+
+    combined_context_parts: list[str] = []
+    contexts = reference.function_contexts if isinstance(reference.function_contexts, dict) else {}
+    for name in grouped_functions:
+        key = str(name or "").strip()
+        if not key:
+            continue
+        entry = contexts.get(key, {})
+        code = str(entry.get("code_context", "")) if isinstance(entry, dict) else ""
+        if code:
+            combined_context_parts.append(f"=== {key} ===\n{code}")
+    if not combined_context_parts:
+        for key, entry in contexts.items():
+            if not isinstance(entry, dict):
+                continue
+            code = str(entry.get("code_context", ""))
+            if code:
+                combined_context_parts.append(f"=== {key} ===\n{code}")
+                break
+
+    lib_root = _infer_lib_root(task.target.module, selected_files, existing_rvv)
 
     module = task.target.module
-    riscv_dir = task.ffmpeg_root / "libavcodec" / "riscv"
-    rvv_path = f"libavcodec/riscv/{module}_rvv.S"
-    init_path = f"libavcodec/riscv/{module}_init.c"
-    makefile_path = "libavcodec/riscv/Makefile"
+    riscv_dir = task.ffmpeg_root / lib_root / "riscv"
+    rvv_path = f"{lib_root}/riscv/{module}_rvv.S"
+    init_path = f"{lib_root}/riscv/{module}_init.c"
+    makefile_path = f"{lib_root}/riscv/Makefile"
 
     return {
         "analysis_json": analysis_json,
-        "selected_files": file_search.get("selected_files", []),
-        "code_context": reference.get("code_context", ""),
-        "existing_rvv": reference.get("existing_rvv", []),
+        "selected_files": selected_files,
+        "code_context": "\n\n".join(combined_context_parts),
+        "existing_rvv": existing_rvv,
         "module": module,
         "symbol": task.target.symbol,
         "target_files": {
+            "lib_root": lib_root,
             "rvv": rvv_path,
             "init": init_path,
             "makefile": makefile_path,
@@ -452,7 +503,7 @@ def _build_planning_bundle(task: TaskContext) -> dict:
             "riscv_dir_exists": riscv_dir.exists(),
             "init_has_rvv_block": _check_has_rvv_block(task.ffmpeg_root / init_path),
             "makefile_has_module": _check_makefile_has_module(task.ffmpeg_root / makefile_path, module),
-            "source_has_riscv_decl": _check_source_has_riscv_decl(task.ffmpeg_root, module),
+            "source_has_riscv_decl": _check_source_has_riscv_decl(task.ffmpeg_root, module, lib_root),
         },
     }
 

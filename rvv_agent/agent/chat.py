@@ -51,6 +51,7 @@ from ..core.task import (
     load_func_discover_artifact,
     load_analysis_artifact,
     load_plan_artifact,
+    load_reference_code_artifact,
 )
 from ..core.util import (
     ensure_dir,
@@ -234,7 +235,7 @@ def handle_func_discover(task: TaskContext) -> TaskContext:
 
 def handle_build_reference(task: TaskContext) -> TaskContext:
     """BUILD_REFERENCE handler: materialize function-scoped reference code context."""
-    from .search import build_context_from_files
+    from .search import build_context_from_files_multi
 
     file_search = task.load_artifact("SEARCH_FILE")
     selected_files = file_search.get("selected_files", [])
@@ -245,28 +246,44 @@ def handle_build_reference(task: TaskContext) -> TaskContext:
     except Exception:
         discovered = []
 
-    function_name = task.target.current_function or (discovered[0] if discovered else task.target.symbol)
-    function_id = f"{task.task_id}:{function_name}"
-    code_context = build_context_from_files(task.ffmpeg_root, symbol=function_name, files=selected_files)
-    write_text(task.run_dir / "context.txt", code_context)
+    symbols: list[str] = []
+    if discovered:
+        symbols.extend(discovered)
+    elif task.target.current_function:
+        symbols.append(task.target.current_function)
+    elif task.target.symbol:
+        symbols.append(task.target.symbol)
+    symbols = list(dict.fromkeys(s for s in symbols if s))
+
+    context_map = build_context_from_files_multi(task.ffmpeg_root, symbols=symbols, files=selected_files)
+    combined_parts: list[str] = []
+    for name, code_context in context_map.items():
+        combined_parts.append(f"=== {name} ===")
+        combined_parts.append(code_context)
+    write_text(task.run_dir / "context.txt", "\n\n".join(combined_parts))
+
+    function_contexts: dict[str, dict] = {}
+    for name in symbols:
+        function_contexts[name] = {
+            "function_name": name,
+            "code_context": context_map.get(name, ""),
+            "matched_symbols": [task.target.symbol, name],
+            "reference_files": selected_files,
+        }
 
     ref_id = now_id()
     artifact = ReferenceCodeArtifact(
         reference_code_id=ref_id,
         file_search_id=str(task.artifacts.file_search_id or file_search.get("file_search_id", "")),
-        function_id=function_id,
-        function_name=function_name,
         reference_files=selected_files,
-        matched_symbols=[task.target.symbol, function_name],
-        code_context=code_context,
+        function_contexts=function_contexts,
         existing_rvv=[str(x) for x in file_search.get("selected_json", {}).get("existing_rvv", [])],
         raw_text="",
         llm_used=False,
     )
 
-    sub_id = slug(function_id)
-    aid = task.save_artifact("BUILD_REFERENCE", artifact, sub_id=sub_id)
-    task.artifacts.reference_code_ids.append(aid)
+    aid = task.save_artifact("BUILD_REFERENCE", artifact)
+    task.artifacts.reference_code_id = aid
     task.current_state = TaskState.PLAN
     return task
 
@@ -326,12 +343,8 @@ def handle_analyze(task: TaskContext) -> TaskContext:
     print(f"\n正在分析 Group [{current_group_idx+1}/{len(plan_data.groups)}]: {current_group.group_id}")
     print(f"  函数: {', '.join(f.name for f in group_functions if f.name)}")
 
-    if task.artifacts.reference_code_ids:
-        sub = task.artifacts.reference_code_ids[-1].split("/", 1)[-1]
-        reference = task.load_artifact("BUILD_REFERENCE", sub_id=sub)
-    else:
-        reference = task.load_artifact("BUILD_REFERENCE")
-    code_context = reference.get("code_context", "")
+    reference = load_reference_code_artifact(task.load_artifact("BUILD_REFERENCE"))
+    function_contexts = reference.function_contexts if isinstance(reference.function_contexts, dict) else {}
 
     discovery = Discovery(symbol=task.target.symbol, matches=[])
 
@@ -373,6 +386,15 @@ def handle_analyze(task: TaskContext) -> TaskContext:
         func_name = func.name
         if not func_name:
             continue
+
+        ctx_entry = function_contexts.get(func_name, {})
+        code_context = str(ctx_entry.get("code_context", "")) if isinstance(ctx_entry, dict) else ""
+        if not code_context:
+            # Fallback to the first non-empty function context in this artifact.
+            for _, v in function_contexts.items():
+                if isinstance(v, dict) and str(v.get("code_context", "")).strip():
+                    code_context = str(v.get("code_context", ""))
+                    break
 
         ctx_dict = builder.build_analyze_context(
             code_context=code_context,

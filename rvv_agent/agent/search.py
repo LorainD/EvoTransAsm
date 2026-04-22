@@ -377,6 +377,28 @@ def build_context_from_files(
     if total > max_total_chars:
         result = result[:max_total_chars]
     return result
+
+
+def build_context_from_files_multi(
+    ffmpeg_root: Path,
+    *,
+    symbols: list[str],
+    files: list[str],
+    max_total_chars: int = 40000,
+    max_funcs_per_file: int = 6,
+) -> dict[str, str]:
+    """Build per-symbol reference contexts from the same selected file set."""
+    out: dict[str, str] = {}
+    ordered = list(dict.fromkeys(str(s or "").strip() for s in symbols if str(s or "").strip()))
+    for sym in ordered:
+        out[sym] = build_context_from_files(
+            ffmpeg_root,
+            symbol=sym,
+            files=files,
+            max_total_chars=max_total_chars,
+            max_funcs_per_file=max_funcs_per_file,
+        )
+    return out
 # ---------------------------------------------------------------------------
 # Retrieval result + LLM-assisted reference selection
 # ---------------------------------------------------------------------------

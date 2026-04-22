@@ -100,11 +100,8 @@ class ReferenceCodeArtifact:
     """Output of BUILD_REFERENCE stage."""
     reference_code_id: str = ""
     file_search_id: str = ""
-    function_id: str = ""
-    function_name: str = ""
     reference_files: list[str] = field(default_factory=list)
-    matched_symbols: list[str] = field(default_factory=list)
-    code_context: str = ""
+    function_contexts: dict[str, dict] = field(default_factory=dict)
     existing_rvv: list[str] = field(default_factory=list)
     raw_text: str = ""
     llm_used: bool = False
@@ -285,6 +282,13 @@ def load_analysis_artifact(data: Any) -> AnalysisArtifact:
     return artifact
 
 
+def load_reference_code_artifact(data: Any) -> ReferenceCodeArtifact:
+    artifact = _coerce_dataclass(ReferenceCodeArtifact, data)
+    if not isinstance(artifact.function_contexts, dict):
+        artifact.function_contexts = {}
+    return artifact
+
+
 @dataclass
 class KBUpdateArtifact:
     """Output of KB_UPDATE stage."""
@@ -310,6 +314,8 @@ class ArtifactIndex:
     # Deprecated field kept for backward compatibility with historical task.json.
     retrieval_id: str | None = None
     file_search_id: str | None = None
+    reference_code_id: str | None = None
+    # Deprecated: kept only to tolerate historical task manifests.
     reference_code_ids: list[str] = field(default_factory=list)
     analysis_ids: list[str] = field(default_factory=list)
     plan_id: str | None = None

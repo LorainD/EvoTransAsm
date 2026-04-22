@@ -83,6 +83,7 @@ def retrieval_prompt(symbol: str, grouped: dict, matches: list) -> str:
   \"riscv\": [\"...\"],
   \"headers\": [\"...\"],
   \"makefiles\": [\"...\"],
+  \"existing_rvv\": [\"...\"],
   \"checkasm\": [\"...\"],
   \"notes\": \"...\"
 }}
@@ -93,6 +94,13 @@ def retrieval_prompt(symbol: str, grouped: dict, matches: list) -> str:
   而不仅仅是 *_init*.c 注册文件——*_init*.c 只是函数指针赋值，真正的向量实现在汇编文件里。
 - 若 x86_refs 或 arm_refs 中同时有 init.c 和 .S/.asm，请把 .S/.asm 放在前面。
 - 当 x86_refs 明显偏少时，可优先利用模块近义词（如 h264pred -> h264）补充 x86 汇编文件。
+
+【父模块与共享文件检索规则（CRITICAL）】
+FFmpeg 中很多子模块（如 hevc_pel, h264_qpel）没有独立的 init.c，它们共享父模块初始化文件与 Makefile 声明。
+1. 若目标 symbol/module 包含下划线（xxx_yyy），必须主动回溯父前缀（xxx）并检索对应 `libxx/riscv/` 目录下共享文件（如 `xxxdsp_init.c`、`xxx*_rvv.S`）。
+2. 只要定位到共享的 `*_init.c` 或 `*.S`，必须显式放入 `existing_rvv` 列表，供后续 PATCH 阶段复用。
+3. 必须将该模块所属库的 `libxx/riscv/Makefile` 选入 `makefiles` 列表，供后续检查是否已注册。
+4. 禁止因为子模块命名而臆造新的 `xxx_yyy_init.c`；优先复用父模块共享 init 文件。
 """
 
 
@@ -107,6 +115,7 @@ def retrieval_alias_prompt(symbol: str, module: str, base_terms: list[str]) -> s
 要求：
 - 只输出 0-5 个 alias，尽量短（如 h264、pred、intra）。
 - alias 仅用于补充汇编文件检索，不要输出通用噪声词。
+- 若目标是子模块（如 xxx_yyy），可补充父前缀（如 xxx）及其常见缩写，用于召回共享 init/汇编文件。
 - 若没有高置信 alias，返回空数组。
 
 严格输出 JSON：
@@ -321,18 +330,21 @@ def generation_prompt(symbol: str, analysis_json: str, existing_files_map: dict 
    每个 item 的 content 只含本次新增的代码。
 
 要求：
-1) .S 汇编实现（target_path 示例：libavcodec/riscv/<module>_rvv.S）
+1) .S 汇编实现（target_path 示例：libxx/riscv/<module>_rvv.S）
    - 若模块 .S 文件**不存在**：action="create"，content 为完整新 .S 文件
      （含 .text / .align / .globl / .type / label / .size / ret 等）。
    - 若模块 .S 文件**已存在**：action="append"，content 仅含新增函数
      （从 .text 起到最后 .size 结束），不含已有函数。
-2) init.c 注册（target_path 示例：libavcodec/riscv/<module>_init.c）
-   - action="append"，content 仅含新增的赋值语句（1-3 行），
+2) init.c 注册（target_path 示例：libxx/riscv/<module>_init.c）
+   - **检查共享文件（CRITICAL）**：若 existing_files/existing_rvv 已存在父模块 init（如 hevcdsp_init.c），绝对不要新建 `hevc_pel_init.c` 等同义文件。
+   - 必须对已存在的父模块 init 文件使用 action="append"，并把新增函数指针赋值插入其现有注册函数中。
+   - action="append" 时，content 仅含新增赋值语句（1-3 行），
      如：c_func(ff_xxx) = ff_xxx_rvv;
    - anchor_hint：指出应插入到哪个函数内的哪个位置，如
      "在 ff_sbrdsp_init_riscv() 函数内 #if HAVE_RVV 块末尾"。
-3) Makefile（target_path 示例：libavcodec/riscv/Makefile）
-   - 仅当创建了新 .S 文件时输出此 item；若只是在已有 .S 追加函数则忽略。
+3) Makefile（target_path 示例：libxx/riscv/Makefile）
+   - 仅当本次 generated 中存在 action="create" 的新文件时才考虑输出 Makefile 变更。
+   - 若本次全部是 action="append"，不要输出 Makefile item。
    - action="append"，content 仅含新增的 .o 行（1-2 行），
      如：                        sbrnewfunc_rvv.o \\
    - anchor_hint：如 "追加到 OBJS-$(CONFIG_AAC_DECODER) 块末尾"。
@@ -341,7 +353,7 @@ def generation_prompt(symbol: str, analysis_json: str, existing_files_map: dict 
 {{{{
   "generated": [
     {{{{
-      "target_path": "libavcodec/riscv/...",
+      "target_path": "libxx/riscv/...",
       "action": "create" | "append",
       "content": "仅新增代码",
       "anchor_hint": "...",
