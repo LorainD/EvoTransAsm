@@ -150,6 +150,8 @@ def patch_generate_prompt(
 1. 按文件单位输出，不要只给零散片段。
 2. RVV .S 要遵循 FFmpeg 现有模式（命名、宏、.globl/.type/ret/.size）。
 3. init.c/Makefile 内容必须与生成实现保持一致，避免声明-实现脱节。
+4. 如果对 Makefile 使用 append（只允许输出新增 `+=` 行），你必须设置 `anchor_hint: "file_start"` 以确保新增声明被插入到文件开头。
+5. 如果在通用 C/H 文件里注入 `#elif ARCH_RISCV` 分支，你必须设置 `anchor_hint: "before_arch_chain_endif"`，把分支插入到与其他 `ARCH_*` 分支同一条预处理链里（即插在该链 closing `#endif` 之前），严禁追加到文件末尾。
 
 ## 输出 JSON（严格）
 {{
@@ -158,7 +160,8 @@ def patch_generate_prompt(
             {{
                 "target_path": "...",
                 "action": "create|append|replace",
-                "content": "..."
+                "content": "...",
+                "anchor_hint": ""
             }}
         ]
     }}

@@ -842,6 +842,158 @@ def _route_apply_failure_with_llm(
     except Exception as e:
         return TaskState.DEBUG, f"route_exception_debug:{e}"
 # ---------------------------------------------------------------------------
+# Anchor-aware append helper
+# ---------------------------------------------------------------------------
+
+def _apply_append_with_anchor(existing: str, content: str, anchor_hint: str, target_path: str) -> str:
+    """Merge *content* into *existing* at the position indicated by *anchor_hint*.
+
+    Supported anchor_hint values
+    ----------------------------
+    ``file_start``
+        Prepend content before everything else.  Used for Makefile declarations
+        that must appear at the top of the file.
+
+    ``before_endif``
+        Insert content just before the **last** ``#endif`` line in the file.
+        Used to inject ``#elif ARCH_RISCV`` blocks into source C/H files that
+        already contain other architecture guards.
+
+    ``before_arch_chain_endif``
+        Insert content just before the closing ``#endif`` of the **last**
+        ``#if/#elif ARCH_*`` preprocessor chain (i.e. right where other
+        architecture branches live). This is safer than ``before_endif`` for
+        files that contain other unrelated ``#endif`` blocks (header guards,
+        feature checks, etc.).
+
+    ``before_arch_endif``
+        Alias for ``before_endif`` — kept for backward compatibility with older
+        LLM outputs.
+
+    ``after_arch_block``
+        Insert content right after the last ``#elif ARCH_*`` / ``#if ARCH_*``
+        block's closing ``#endif``.  Falls back to ``before_endif`` when the
+        pattern is not found.
+
+    *(empty / anything else)*
+        Classic tail-append: ``existing + "\\n\\n" + content``.
+    """
+    if not existing:
+        return content
+
+    hint = (anchor_hint or "").strip().lower()
+
+    # ------------------------------------------------------------------ #
+    # file_start — prepend (Makefile declarations)
+    # ------------------------------------------------------------------ #
+    if hint == "file_start":
+        return content.rstrip("\n") + "\n\n" + existing.lstrip("\n")
+
+    # ------------------------------------------------------------------ #
+    # before_endif / before_arch_endif — inject before last #endif
+    # Used for ARCH_RISCV blocks in C/H dispatcher functions.
+    # ------------------------------------------------------------------ #
+    if hint in ("before_endif", "before_arch_endif"):
+        lines = existing.splitlines(keepends=True)
+        # Find the last line that is a bare #endif (possibly with comment)
+        last_endif_idx = -1
+        for i in range(len(lines) - 1, -1, -1):
+            stripped = lines[i].strip()
+            if re.match(r"^#\s*endif\b", stripped):
+                last_endif_idx = i
+                break
+        if last_endif_idx == -1:
+            # No #endif found — fall back to tail append
+            return existing.rstrip("\n") + "\n\n" + content.lstrip("\n")
+        injected = content.rstrip("\n") + "\n"
+        lines.insert(last_endif_idx, injected)
+        return "".join(lines)
+
+    # ------------------------------------------------------------------ #
+    # before_arch_chain_endif — inject before the closing #endif of the
+    # last ARCH_* chain (preferred for ARCH_RISCV branch injection).
+    # ------------------------------------------------------------------ #
+    if hint == "before_arch_chain_endif":
+        lines = existing.splitlines(keepends=True)
+        # Locate the last #if/#elif ARCH_* line.
+        chain_start = -1
+        for i in range(len(lines) - 1, -1, -1):
+            if re.search(r"#\s*(if|elif)\s+ARCH_", lines[i]):
+                chain_start = i
+                break
+        if chain_start == -1:
+            # No ARCH chain found — fall back to before_endif
+            return _apply_append_with_anchor(existing, content, "before_endif", target_path)
+
+        # Walk forward to find the closing #endif for the chain_start's #if.
+        # Note: chain_start can be "#elif ARCH_*" (the chain's opening "#if"
+        # is above it). In that case we must treat the chain as already open,
+        # otherwise a nested "#if ... #endif" inside the branch could be
+        # mistaken as the chain's closing "#endif".
+        start_line = lines[chain_start].strip()
+        depth = 1 if re.match(r"^#\s*elif\b", start_line) else 0
+        closing_endif_idx = -1
+        for i in range(chain_start, len(lines)):
+            stripped = lines[i].strip()
+            if re.match(r"^#\s*if\b", stripped):
+                depth += 1
+            elif re.match(r"^#\s*endif\b", stripped):
+                # Close one level.
+                if depth > 0:
+                    depth -= 1
+                # When we return to zero, we found the chain's closing endif.
+                if depth == 0:
+                    closing_endif_idx = i
+                    break
+
+        if closing_endif_idx == -1:
+            return _apply_append_with_anchor(existing, content, "before_endif", target_path)
+
+        injected = content.rstrip("\n") + "\n"
+        lines.insert(closing_endif_idx, injected)
+        return "".join(lines)
+
+    # ------------------------------------------------------------------ #
+    # after_arch_block — insert after the closing #endif of the last
+    # ARCH_* preprocessor block.
+    # ------------------------------------------------------------------ #
+    if hint == "after_arch_block":
+        lines = existing.splitlines(keepends=True)
+        # Locate the last #if ARCH_* or #elif ARCH_* line
+        arch_block_start = -1
+        for i in range(len(lines) - 1, -1, -1):
+            if re.search(r"#\s*(if|elif)\s+ARCH_", lines[i]):
+                arch_block_start = i
+                break
+        if arch_block_start == -1:
+            # No ARCH block found — fall back to before_endif
+            return _apply_append_with_anchor(existing, content, "before_endif", target_path)
+        # Find the matching #endif after arch_block_start
+        depth = 0
+        insert_after = -1
+        for i in range(arch_block_start, len(lines)):
+            stripped = lines[i].strip()
+            if re.match(r"^#\s*if\b", stripped):
+                depth += 1
+            elif re.match(r"^#\s*endif\b", stripped):
+                if depth > 0:
+                    depth -= 1
+                else:
+                    insert_after = i
+                    break
+        if insert_after == -1:
+            return _apply_append_with_anchor(existing, content, "before_endif", target_path)
+        injected = "\n" + content.rstrip("\n") + "\n"
+        lines.insert(insert_after + 1, injected)
+        return "".join(lines)
+
+    # ------------------------------------------------------------------ #
+    # Default: tail append
+    # ------------------------------------------------------------------ #
+    return existing.rstrip("\n") + "\n\n" + content.lstrip("\n")
+
+
+# ---------------------------------------------------------------------------
 # Step 1: Generate code
 # ---------------------------------------------------------------------------
 
@@ -1047,7 +1199,18 @@ def apply_patch(task: TaskContext, generate_plan: dict) -> PatchArtifact:
                     logs.append(log)
                     continue
 
-                merged = existing.rstrip("\n") + "\n\n" + content.lstrip("\n") if existing else content
+                anchor_hint = str(item.get("anchor_hint", "")).strip().lower()
+                # Heuristic fallback: if LLM forgot anchor_hint, infer safe insertion.
+                # - Makefile: declarations must be at file start.
+                # - ARCH_RISCV injection: place inside the architecture chain.
+                if not anchor_hint:
+                    low_path = target_path.lower().replace("\\", "/")
+                    low_content = content.lower()
+                    if low_path.endswith("/makefile") or low_path.endswith("makefile"):
+                        anchor_hint = "file_start"
+                    elif re.search(r"#\s*(if|elif)\s+arch_riscv\b", low_content):
+                        anchor_hint = "before_arch_chain_endif"
+                merged = _apply_append_with_anchor(existing, content, anchor_hint, target_path)
                 write_text(dst, merged)
                 applied_at = "append"
 

@@ -350,6 +350,7 @@ def generation_prompt(symbol: str, analysis_json: str, existing_files_map: dict 
    每个 item 的 content 只含本次新增的代码。
 
 要求：
+0) target_path中的 libxx 必须参考reference_files中当前函数所在c文件的路径结构，保持一致性。
 1) .S 汇编实现（target_path 示例：libxx/riscv/<module>_rvv.S）
    - 若模块 .S 文件**不存在**：action="create"，content 为完整新 .S 文件
      （含 .text / .align / .globl / .type / label / .size / ret 等）。
