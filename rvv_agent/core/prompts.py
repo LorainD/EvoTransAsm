@@ -365,9 +365,8 @@ def generation_prompt(symbol: str, analysis_json: str, existing_files_map: dict 
      "在 ff_sbrdsp_init_riscv() 函数内 #if HAVE_RVV 块末尾"。
 3) Makefile（target_path 示例：libxx/riscv/Makefile）
    - 仅当本次 generated 中存在 action="create" 的新文件时才考虑输出 Makefile 变更。
-   - 若本次全部是 action="append"，不要输出 Makefile item。
    - action="append"，content 仅含新增的 .o 行（1-2 行），
-     如：                        sbrnewfunc_rvv.o \\
+     如：sbrnewfunc_rvv.o \\
    - anchor_hint：如 "追加到 OBJS-$(CONFIG_AAC_DECODER) 块末尾"。
 
 输出格式必须是严格 JSON（不要额外文字）：

@@ -20,7 +20,7 @@ from .llm import record_trajectory_action
 HandlerFn = Callable[[TaskContext], TaskContext]
 
 # Maximum iterations to guard against infinite loops (e.g. DEBUG ↔ PATCH).
-_MAX_ITERATIONS = 50
+_MAX_ITERATIONS = 100
 
 
 class StateMachine:

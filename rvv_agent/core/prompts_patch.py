@@ -117,7 +117,7 @@ def patch_generate_prompt(
                 prev_parts.append(f"### {tp}\n```\n{code[:3000]}\n```")
             if prev_parts:
                 fix_section += "\n## 上次生成的代码（有错误，需要修正）\n" + "\n".join(prev_parts) + "\n"
-        fix_section += "\n请根据以上错误信息修正代码，而不是从头重新生成。\n"
+        fix_section += "\n请根据以上错误信息修正代码\n"
 
     validation_section = ""
     if validation_feedback:
@@ -131,7 +131,7 @@ def patch_generate_prompt(
     if repository_knowledge_entry:
         repo_section = (
             "\n## 仓库实现经验（repository_knowledge）\n"
-            + json.dumps(repository_knowledge_entry, ensure_ascii=False, indent=2)[:5000]
+            + json.dumps(repository_knowledge_entry, ensure_ascii=False, indent=2)[:1000]
             + "\n"
         )
 
@@ -161,6 +161,7 @@ def patch_generate_prompt(
 5. 如果在通用 C/H 文件里注入 `#elif ARCH_RISCV` 分支，你必须设置 `anchor_hint: "before_arch_chain_endif"`，把分支插入到与其他 `ARCH_*` 分支同一条预处理链里（即插在该链 closing `#endif` 之前），严禁追加到文件末尾。
 6. 当你需要对已有文件执行 append 或 replace 时，必须先通过 view_file 工具查看该文件的当前内容（带行号，最大4000行），了解文件结构后再生成 patch，禁止在未查看的情况下直接修改已有文件。
 7. 遇到实现困难或需要修复 debug 错误时，建议先用 view_file 查看语义分析中列出的其他架构参考文件（arm/aarch64/x86 的 .S 文件），参考其函数签名、寄存器用法和算法逻辑来优化 RVV 实现。
+8. ★★ 严禁生成空壳实现。.S 文件中每个函数必须包含真实的 RVV 向量指令（如 vle/vse/vadd/vmul 等 v 开头指令），仅有 ret 或仅做标量 load/store 的函数视为空壳，会被系统检测并拒绝。
 
 ## 输出 JSON（严格）
 {{

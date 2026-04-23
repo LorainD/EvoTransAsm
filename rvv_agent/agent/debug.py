@@ -286,17 +286,24 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
             )
             error_text = (error_text + injected_debug_hint).strip()
 
+    # ── rvv_missing 空壳实现检测：无条件注入，确保 LLM 能感知 ──
+    if root_cause == "rvv_missing":
+        rvv_missing_hint = (
+            "\n\n【严重错误：空壳实现（rvv_missing）】\n"
+            "构建通过，但系统未在生成的 .S 文件中检测到任何有效的 RVV 向量指令（如 vle/vse/vadd/vmul 等 v 开头指令）。\n"
+            "当前实现是空壳——仅有函数框架（.globl/ret）而没有真正的向量计算逻辑。\n"
+            "这不是构建错误，而是实现质量问题。你必须：\n"
+            "1. 在 .S 文件中为每个函数编写真实的 RVV 向量指令实现；\n"
+            "2. 参考同算子的 arm/aarch64 汇编实现来理解算法逻辑；\n"
+            "3. 严禁再次生成仅含 ret 的占位函数。"
+        )
+        error_text = (error_text + rvv_missing_hint).strip()
+        print("[DEBUG] Detected rvv_missing semantic failure, forcing PATCH retry")
+
     if not error_text.strip():
-        if root_cause == "rvv_missing":
-            error_text = (
-                "Build passed but rvv_missing: no real RVV instructions detected in generated implementation.\n"
-                "Treat this as semantic build failure and regenerate RVV implementation instead of empty shell."
-            )
-            print("[DEBUG] Detected rvv_missing semantic failure, forcing PATCH retry")
-        else:
-            print("[DEBUG] No errors found in build output, moving to KB_UPDATE")
-            task.current_state = TaskState.KB_UPDATE
-            return task
+        print("[DEBUG] No errors found in build output, moving to KB_UPDATE")
+        task.current_state = TaskState.KB_UPDATE
+        return task
 
     # Derive a stage-level default error_class from where the failure surfaced.
     # This tag is later refined (or confirmed) by the LLM; the fine-grained kind

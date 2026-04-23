@@ -279,14 +279,14 @@ def _dedupe_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
 # ---------------------------------------------------------------------------
 # Context builder from files — 智能函数体提取版
 # ---------------------------------------------------------------------------
-
+#TODO：应该只找与模块有关的.h文件和不同架构（x86/arm/aarch64）下的init.c文件，根据函数声明来寻找对应函数体，调用llm进行函数筛选
 def build_context_from_files(
     ffmpeg_root: Path,
     *,
     symbol: str,
     files: list[str],
     max_total_chars: int = 40000,
-    max_funcs_per_file: int = 6,
+    max_funcs_per_file: int = 10,
 ) -> str:
     """根据算子/函数名，从指定文件列表中提取相关性最高的完整函数体。
 

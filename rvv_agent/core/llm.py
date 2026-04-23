@@ -194,7 +194,7 @@ def record_trajectory_action(
 
 _DEFAULT_PRICING: dict[str, tuple[float, float]] = {
     # model-name-prefix → ($/1M input, $/1M output)
-    "gpt-5.4":(0.3750,2.25),
+    "gpt-5.4":(2.5,15),
     "claude-sonnet-4-6":(0.9,4.5),
     "claude-opus-4-6":(1.5,7.5),
     "gemini-3-pro-preview":(1.0,6.0),
