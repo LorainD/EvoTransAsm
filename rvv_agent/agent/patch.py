@@ -419,7 +419,7 @@ def _build_patch_tools(task: TaskContext) -> list[ToolSpec]:
     """Construct ToolSpec list for PATCH/BUILD tool-use loop.
 
     这一批工具专门为后续的 run_patch_with_tools 设计，目前覆盖：
-    - read_file: 在 ffmpeg_root 沙箱内读取文件内容；
+    - view_file: 带行号查看文件内容（最大4000行），LLM 在修改已有文件前必须先调用；
     - write_patch: 利用 apply_patch 的核心逻辑对单个 patch 进行写入；
     - run_build: 触发一次 configure + make checkasm 构建（与 pipeline BUILD 一致）；
     - rollback_last_apply: 回滚最近一次 apply_ 快照。
@@ -430,9 +430,10 @@ def _build_patch_tools(task: TaskContext) -> list[ToolSpec]:
 
     ffmpeg_root = task.ffmpeg_root
 
-    def _tool_read_file(args: dict) -> dict:
+    def _tool_view_file(args: dict) -> dict:
+        """查看文件内容（带行号），最大 4000 行。用于修改已有文件前先了解其结构。"""
         rel = str(args.get("path", "")).strip()
-        max_chars = int(args.get("max_chars", 4000) or 4000)
+        max_lines = min(int(args.get("max_lines", 4000) or 4000), 4000)
         if not rel:
             return {"ok": False, "error": "missing path"}
         full = ffmpeg_root / rel
@@ -442,9 +443,13 @@ def _build_patch_tools(task: TaskContext) -> list[ToolSpec]:
             text = full.read_text(encoding="utf-8", errors="replace")
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": f"read_failed: {e}"}
-        if len(text) > max_chars:
-            text = text[:max_chars] + "\n... (truncated)"
-        return {"ok": True, "exists": True, "path": rel, "content": text}
+        lines = text.splitlines()
+        total = len(lines)
+        display = lines[:max_lines]
+        numbered = "\n".join(f"{i+1:5d}: {l}" for i, l in enumerate(display))
+        if total > max_lines:
+            numbered += f"\n... (showing {max_lines}/{total} lines, truncated)"
+        return {"ok": True, "exists": True, "path": rel, "total_lines": total, "content": numbered}
 
     def _tool_write_patch(args: dict) -> dict:
         """Apply a single patch item using apply_patch semantics."""
@@ -504,10 +509,10 @@ def _build_patch_tools(task: TaskContext) -> list[ToolSpec]:
 
     return [
         ToolSpec(
-            name="read_file",
-            description="读取 FFmpeg 工作区内指定相对路径的文件内容",
-            parameters={"path": {"type": "string"}, "max_chars": {"type": "integer", "optional": True}},
-            func=_tool_read_file,
+            name="view_file",
+            description="查看文件内容（带行号，最大4000行）。在对已有文件执行 append/replace 之前必须先调用此工具了解文件结构",
+            parameters={"path": {"type": "string"}, "max_lines": {"type": "integer", "optional": True}},
+            func=_tool_view_file,
         ),
         ToolSpec(
             name="write_patch",
@@ -986,7 +991,7 @@ def _route_apply_failure_with_llm(
 
         messages = [
             LlmMessage(role="system", content=system_prompt()),
-            _patch_harness_system_message(),
+            _patch_harness_system_message(),  # temporarily disabled
             LlmMessage(role="user", content=debug_classify_prompt(debug_ctx)),
         ]
         raw = chat_completion_with_retry(
@@ -1262,7 +1267,7 @@ def generate_code(task: TaskContext,
 
     messages = [
         LlmMessage(role="system", content=system_prompt()),
-        _patch_harness_system_message(),
+        _patch_harness_system_message(),  # temporarily disabled
         LlmMessage(role="user", content=patch_generate_prompt(patch_ctx)),
     ]
     try:
@@ -1646,9 +1651,19 @@ def run_patch_with_tools(task: TaskContext) -> PatchArtifact:
 
     tools = _build_patch_tools(task)
 
+    # 动态生成工具清单，让 LLM 知道有哪些工具可调用及其参数
+    tool_list_lines = []
+    for t in tools:
+        params_desc = ", ".join(
+            f"{k}: {v.get('type', '?')}" + (" (optional)" if v.get("optional") else "")
+            for k, v in t.parameters.items()
+        )
+        tool_list_lines.append(f"  - {t.name}({params_desc}): {t.description}")
+    tool_list_text = "\n".join(tool_list_lines)
+
     messages = [
         LlmMessage(role="system", content=system_prompt()),
-        _patch_harness_system_message(),
+        _patch_harness_system_message(),  # temporarily disabled
         LlmMessage(
             role="user",
             content=(
@@ -1658,6 +1673,11 @@ def run_patch_with_tools(task: TaskContext) -> PatchArtifact:
                 "   {\"tool_call\": {\"name\": \"<tool_name>\", \"arguments\": { ... }}}\n"
                 "2. 完成全部修改后，请输出：\n"
                 "   {\"final\": {\"generate_plan\": {\"patches\": [ ... ]}}}\n\n"
+                "## 可用工具\n"
+                f"{tool_list_text}\n\n"
+                "## 重要：修改已有文件前必须先查看\n"
+                "当你需要对已有文件执行 append 或 replace 操作时，**必须**先调用 view_file 工具查看该文件的当前内容，\n"
+                "了解文件结构和插入位置后再生成 patch。这能避免盲目插入导致的重复代码或位置错误。\n\n"
                 "下面是当前 PATCH 上下文：\n\n" + patch_generate_prompt(patch_ctx)
             ),
         ),
@@ -1667,7 +1687,7 @@ def run_patch_with_tools(task: TaskContext) -> PatchArtifact:
         task.cfg.llm,
         messages,
         tools,
-        max_rounds=6,
+        max_rounds=10,
         max_tokens=2600,
         timeout_seconds=180.0,
         stage="patch_tools",

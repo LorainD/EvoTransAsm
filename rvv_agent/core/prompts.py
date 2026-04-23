@@ -472,8 +472,8 @@ def plan_prompt(
 - 如果某些函数语义相似、难度低，可以建议批量迁移。
 - 如果某函数明显更复杂，应该放在更后。
 - 如果生成了新的必要文件，需要更改makefile，针对makefile的修改只能添加，不能删除已有内容。
-- 若参考文件中出现 "[existing-rvv] libavcodec/riscv/..._rvv.S" 或 "[existing-rvv] ..._init.c"，
-  计划应明确优先在现有 RVV 文件上 append/增量扩展，而不是重复创建新的 .S 文件，同时可以考虑不需要修改makefile和源文件riscv入口。
+- 若参考文件中出现 "[existing-rvv] libxx/riscv/..._rvv.S" 或 "[existing-rvv] ..._init.c"，
+  计划应明确优先在现有 RVV 文件上 append/增量扩展，而不是重复创建新的 .S 文件，同时一定要考虑不需要修改makefile和源文件riscv入口的可能性。
 - 输出严格 JSON（不要额外文字）。
 
 输出格式：
