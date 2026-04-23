@@ -113,9 +113,9 @@ def _llm_classify(
         raw = chat_completion_with_retry(
             cfg.llm,
             messages,
-            max_tokens=800,
+            max_tokens=8000,
             stage="debug_classify",
-            max_retries=3,
+            max_retries=5,
         )
         raw = raw.strip()
         s = raw.find("{")
@@ -146,8 +146,8 @@ def _llm_classify(
 # ---------------------------------------------------------------------------
 
 _MAX_DEBUG_CYCLES = 3
-_MAX_GROUP_ITERATIONS = 3
-_MAX_PREBUILD_PATCH_RETRIES = 3
+_MAX_GROUP_ITERATIONS = 5
+_MAX_PREBUILD_PATCH_RETRIES = 5
 
 
 def _move_to_next_group_or_finish(task: TaskContext) -> TaskContext:

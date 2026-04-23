@@ -74,6 +74,44 @@ def _parse_checkasm_name_from_content(content: str) -> str:
     return m.group(1) if m else ""
 
 
+# 匹配 tests[] 数组中的条目，如 { "opusdsp", checkasm_check_opusdsp },
+_TESTS_ENTRY_RE = re.compile(
+    r'\{\s*"([A-Za-z0-9_]+)"\s*,\s*checkasm_check_([A-Za-z0-9_]+)\s*\}'
+)
+
+
+def _match_test_name_in_main(content: str, module_hint: str) -> str:
+    """从 checkasm.c 主入口的 tests[] 数组中按 module 名匹配 --test 名。
+
+    解析形如 { "opusdsp", checkasm_check_opusdsp } 的条目，
+    找到与 module_hint 最接近的 test name。
+    """
+    if not module_hint:
+        return ""
+    hint = module_hint.lower().replace("_", "")
+    entries = _TESTS_ENTRY_RE.findall(content)  # list of (name, func_suffix)
+    if not entries:
+        return ""
+
+    # 精确匹配
+    for name, _ in entries:
+        if name.lower() == module_hint.lower():
+            return name
+
+    # 去下划线后精确匹配
+    for name, _ in entries:
+        if name.lower().replace("_", "") == hint:
+            return name
+
+    # 子串包含匹配（双向）
+    for name, _ in entries:
+        n = name.lower().replace("_", "")
+        if hint in n or n in hint:
+            return name
+
+    return ""
+
+
 def resolve_checkasm_test_name(
     ffmpeg_root: Path,
     checkasm_file_paths: list[str] | None,
@@ -108,6 +146,15 @@ def resolve_checkasm_test_name(
             content = full.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
+
+        # 如果是 checkasm.c 主入口，用 tests[] 数组按 module 名匹配
+        if Path(rel).name == "checkasm.c":
+            matched = _match_test_name_in_main(content, fallback)
+            if matched:
+                return matched, rel
+            # 主入口没匹配到，跳过，不要用 re.search 取第一个
+            continue
+
         name = _parse_checkasm_name_from_content(content)
         if name:
             return name, rel
@@ -159,7 +206,13 @@ def run_with_sshpass(argv: list[str], password: str, *, timeout_sec: int | None 
     return run_cmd([sshpass, "-p", password, *argv], timeout_sec=timeout_sec)
 
 
-def analyze_checkasm_output(stdout: str, stderr: str, returncode: int) -> CheckasmResult:
+def analyze_checkasm_output(
+    stdout: str,
+    stderr: str,
+    returncode: int,
+    *,
+    expected_symbol: str = "",
+) -> CheckasmResult:
     combined = f"{stdout}\n{stderr}".lower()
 
     if returncode == 124 or "timed out" in combined:
@@ -184,14 +237,28 @@ def analyze_checkasm_output(stdout: str, stderr: str, returncode: int) -> Checka
         return CheckasmResult(success=False, reason="zero_tests_executed")
 
     # 正向语义：必须看到明确的非零测试通过，或常见 OK 标记。
+    passed = False
     if re.search(r"checkasm:\s*all\s*[1-9][0-9]*\s*tests\s*passed", combined):
-        return CheckasmResult(success=True, reason="ok")
+        passed = True
+    elif re.search(r"\bcheckasm\b.*\bok\b", combined):
+        passed = True
 
-    if re.search(r"\bcheckasm\b.*\bok\b", combined):
-        return CheckasmResult(success=True, reason="ok")
+    if not passed:
+        # 非零 rc 之外的未知输出也按失败处理，避免假阳性。
+        return CheckasmResult(success=False, reason="unrecognized_test_output")
 
-    # 非零 rc 之外的未知输出也按失败处理，避免假阳性。
-    return CheckasmResult(success=False, reason="unrecognized_test_output")
+    # ── 检查目标函数是否真的被测试到 ──
+    if expected_symbol:
+        # 从 symbol 中提取函数名部分，如 "sbrdsp.neg_odd_64" -> "neg_odd_64"
+        func_name = expected_symbol.split(".")[-1] if "." in expected_symbol else expected_symbol
+        func_name_lower = func_name.lower().strip()
+        if func_name_lower and func_name_lower not in combined:
+            return CheckasmResult(
+                success=False,
+                reason=f"target_function_not_tested:{func_name}",
+            )
+
+    return CheckasmResult(success=True, reason="ok")
 
 
 def is_infra_failure(reason: str) -> bool:

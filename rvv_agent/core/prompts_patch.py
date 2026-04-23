@@ -159,7 +159,8 @@ def patch_generate_prompt(
 3. init.c/Makefile 内容必须与生成实现保持一致，避免声明-实现脱节。
 4. 如果对 Makefile 使用 append（只允许输出新增 `+=` 行），你必须设置 `anchor_hint: "file_start"` 以确保新增声明被插入到文件开头。
 5. 如果在通用 C/H 文件里注入 `#elif ARCH_RISCV` 分支，你必须设置 `anchor_hint: "before_arch_chain_endif"`，把分支插入到与其他 `ARCH_*` 分支同一条预处理链里（即插在该链 closing `#endif` 之前），严禁追加到文件末尾。
-6. 当你需要对已有文件执行 append 或 replace 时，必须先通过 view_file 工具查看该文件的当前内容（带行号，最大1000行），了解文件结构后再生成 patch，禁止在未查看的情况下直接修改已有文件。
+6. 当你需要对已有文件执行 append 或 replace 时，必须先通过 view_file 工具查看该文件的当前内容（带行号，最大4000行），了解文件结构后再生成 patch，禁止在未查看的情况下直接修改已有文件。
+7. 遇到实现困难或需要修复 debug 错误时，建议先用 view_file 查看语义分析中列出的其他架构参考文件（arm/aarch64/x86 的 .S 文件），参考其函数签名、寄存器用法和算法逻辑来优化 RVV 实现。
 
 ## 输出 JSON（严格）
 {{

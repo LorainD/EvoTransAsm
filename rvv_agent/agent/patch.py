@@ -420,9 +420,9 @@ def _build_patch_tools(task: TaskContext) -> list[ToolSpec]:
 
     这一批工具专门为后续的 run_patch_with_tools 设计，目前覆盖：
     - view_file: 带行号查看文件内容（最大4000行），LLM 在修改已有文件前必须先调用；
-    - write_patch: 利用 apply_patch 的核心逻辑对单个 patch 进行写入；
-    - run_build: 触发一次 configure + make checkasm 构建（与 pipeline BUILD 一致）；
-    - rollback_last_apply: 回滚最近一次 apply_ 快照。
+    - write_patch: 利用 apply_patch 的核心逻辑对单个 patch 进行写入。
+
+    构建（configure/make）和回滚由状态机（BUILD/DEBUG）控制，不暴露给 LLM。
 
     注意：ToolSpec.func 通过闭包捕获 TaskContext，确保所有文件操作
     都限制在 task.ffmpeg_root 下，不越界到工作区之外。
@@ -438,6 +438,8 @@ def _build_patch_tools(task: TaskContext) -> list[ToolSpec]:
             return {"ok": False, "error": "missing path"}
         full = ffmpeg_root / rel
         if not full.exists() or not full.is_file():
+            print(f"  [tool] view_file: {rel} (not found)")
+            record_trajectory_action("tool_call", f"view_file: {rel} -> not_found")
             return {"ok": False, "error": "not_found", "exists": False}
         try:
             text = full.read_text(encoding="utf-8", errors="replace")
@@ -449,19 +451,28 @@ def _build_patch_tools(task: TaskContext) -> list[ToolSpec]:
         numbered = "\n".join(f"{i+1:5d}: {l}" for i, l in enumerate(display))
         if total > max_lines:
             numbered += f"\n... (showing {max_lines}/{total} lines, truncated)"
+        print(f"  [tool] view_file: {rel} ({total} lines)")
+        record_trajectory_action("tool_call", f"view_file: {rel}, {total} lines")
         return {"ok": True, "exists": True, "path": rel, "total_lines": total, "content": numbered}
 
     def _tool_write_patch(args: dict) -> dict:
         """Apply a single patch item using apply_patch semantics."""
+        target_path = str(args.get("target_path", ""))
+        action = str(args.get("action", "create") or "create")
         raw_item = {
-            "target_path": str(args.get("target_path", "")),
-            "action": str(args.get("action", "create") or "create"),
+            "target_path": target_path,
+            "action": action,
             "content": str(args.get("content", "")),
             "anchor_hint": str(args.get("anchor_hint", "")),
             "description": str(args.get("description", "")),
         }
         plan = {"generate_plan": {"patches": [raw_item]}, "generated": [raw_item]}
         artifact = apply_patch(task, plan)
+        if artifact.success:
+            print(f"  [tool] write_patch: {action} {target_path} -> ok")
+        else:
+            print(f"  [tool] write_patch: {action} {target_path} -> FAILED: {artifact.error}")
+        record_trajectory_action("tool_call", f"write_patch: {action} {target_path}, ok={artifact.success}, error={artifact.error}")
         return {
             "ok": artifact.success,
             "patch_id": artifact.patch_id,
@@ -475,9 +486,14 @@ def _build_patch_tools(task: TaskContext) -> list[ToolSpec]:
         jobs = int(args.get("jobs") or task.jobs or (os.cpu_count() or 1))
         jobs = max(1, jobs)
 
+        print(f"  [tool] run_build: configure + make (jobs={jobs})")
+        record_trajectory_action("tool_call", f"run_build: jobs={jobs}")
+
         cfg_res = run_configure(task.cfg, ffmpeg_root, build_dir)
         cfg_err = extract_build_errors(cfg_res.stdout + cfg_res.stderr)
         if cfg_res.returncode != 0:
+            print(f"  [tool] run_build: configure FAILED (rc={cfg_res.returncode})")
+            record_trajectory_action("tool_call", f"run_build: configure failed rc={cfg_res.returncode}")
             return {
                 "phase": "configure",
                 "ok": False,
@@ -488,9 +504,12 @@ def _build_patch_tools(task: TaskContext) -> list[ToolSpec]:
 
         make_res = run_make_checkasm(task.cfg, build_dir, jobs)
         make_err = extract_build_errors(make_res.stdout + make_res.stderr)
+        ok = make_res.returncode == 0
+        print(f"  [tool] run_build: make {'ok' if ok else 'FAILED'} (rc={make_res.returncode})")
+        record_trajectory_action("tool_call", f"run_build: make ok={ok} rc={make_res.returncode}")
         return {
             "phase": "make",
-            "ok": make_res.returncode == 0,
+            "ok": ok,
             "exitcode": make_res.returncode,
             "cmd": fmt_argv(make_checkasm_argv(jobs=jobs)),
             "errors": make_err,
@@ -500,6 +519,8 @@ def _build_patch_tools(task: TaskContext) -> list[ToolSpec]:
         before_ids = list(task.artifacts.patch_ids)
         _rollback_previous_apply(task)
         after_ids = list(task.artifacts.patch_ids)
+        print(f"  [tool] rollback_last_apply: {len(before_ids)} -> {len(after_ids)} patches")
+        record_trajectory_action("tool_call", f"rollback_last_apply: {len(before_ids)} -> {len(after_ids)}")
         return {
             "ok": True,
             "note": "rollback_previous_apply executed",
@@ -525,18 +546,6 @@ def _build_patch_tools(task: TaskContext) -> list[ToolSpec]:
                 "description": {"type": "string", "optional": True},
             },
             func=_tool_write_patch,
-        ),
-        ToolSpec(
-            name="run_build",
-            description="在当前 ffmpeg_root 下执行 configure + make checkasm 构建",
-            parameters={"jobs": {"type": "integer", "optional": True}},
-            func=_tool_run_build,
-        ),
-        ToolSpec(
-            name="rollback_last_apply",
-            description="回滚最近一次 apply 对工作区的修改",
-            parameters={},
-            func=_tool_rollback_last_apply,
         ),
     ]
 
@@ -1678,20 +1687,40 @@ def run_patch_with_tools(task: TaskContext) -> PatchArtifact:
                 "## 重要：修改已有文件前必须先查看\n"
                 "当你需要对已有文件执行 append 或 replace 操作时，**必须**先调用 view_file 工具查看该文件的当前内容，\n"
                 "了解文件结构和插入位置后再生成 patch。这能避免盲目插入导致的重复代码或位置错误。\n\n"
+                "## 提示：利用参考实现优化代码\n"
+                "view_file 可以查看 ffmpeg_root 下的任意文件。语义分析和注入目标中列出的 arm/aarch64/x86 参考文件路径都可以直接用 view_file 查看。\n"
+                "当你遇到实现困难或需要修复 debug 反馈的错误时，建议先用 view_file 查看同算子的其他架构实现（如 arm/aarch64 的 .S 文件），\n"
+                "参考其函数签名、寄存器用法和算法逻辑来优化你的 RVV 实现。\n\n"
                 "下面是当前 PATCH 上下文：\n\n" + patch_generate_prompt(patch_ctx)
             ),
         ),
     ]
 
-    _, final_result = run_tool_use_loop(
-        task.cfg.llm,
-        messages,
-        tools,
-        max_rounds=10,
-        max_tokens=2600,
-        timeout_seconds=180.0,
-        stage="patch_tools",
-    )
+    try:
+        _, final_result = run_tool_use_loop(
+            task.cfg.llm,
+            messages,
+            tools,
+            max_rounds=20,
+            max_tokens=8000,
+            timeout_seconds=180.0,
+            stage="patch_tools",
+        )
+    except LlmError as e:
+        print(f"[PATCH] tool-use loop LLM 调用失败: {e}")
+        record_trajectory_action("patch_tools", f"llm_error: {e}")
+        return PatchArtifact(
+            patch_id=now_id(),
+            group_id=_current_group_id(task),
+            func=task.target.symbol,
+            points=[],
+            design={},
+            generate_plan={},
+            applied_paths=[],
+            diffs=[],
+            success=False,
+            error=f"llm_unavailable:{type(e).__name__}:{str(e)[:200]}",
+        )
 
     gen_plan: dict
     if isinstance(final_result, dict) and isinstance(final_result.get("final"), dict):
@@ -1723,10 +1752,16 @@ def run_patch_stage_tools(task: TaskContext, kb_patterns: list[dict] | None = No
     PatchArtifact 的结果更新状态机，与传统 run_patch_stage 的尾部逻辑保持一致。
     """
 
+    symbol = task.target.symbol
+    retry_no = task.artifacts.prebuild_generate_retries
+    print(f"\n[PATCH-tools] 开始生成: symbol={symbol}, retry={retry_no}")
+    record_trajectory_action("patch_tools_start", f"symbol={symbol}, retry={retry_no}")
+
     artifact = run_patch_with_tools(task)
 
     if artifact.success:
         task.artifacts.prebuild_generate_retries = 0
+        print(f"[PATCH-tools] 生成成功, 写入 {len(artifact.applied_paths)} 个文件:")
         for ap in artifact.applied_paths:
             print(f"  ✓ {ap}")
         record_trajectory_action("patch_route_decision", "patch_apply_success_tools -> BUILD")
@@ -1734,7 +1769,10 @@ def run_patch_stage_tools(task: TaskContext, kb_patterns: list[dict] | None = No
         return task
 
     print(f"  ✗ apply failed (tools): {artifact.error}")
+    record_trajectory_action("patch_tools_failed", f"error={artifact.error}")
+
     next_state, route_reason = _route_apply_failure_with_llm(task, artifact)
+    print(f"[PATCH-tools] 路由决策: -> {next_state.value}, reason={route_reason}")
     record_trajectory_action(
         "patch_route_decision",
         f"patch_apply_fail_tools -> {next_state.value}, reason={route_reason}, error={artifact.error}",
@@ -1747,11 +1785,14 @@ def run_patch_stage_tools(task: TaskContext, kb_patterns: list[dict] | None = No
             return _move_to_next_group_or_finish(task, outcome="failed")
         if not task.rollback_hint:
             task.rollback_hint = "generate"
+        print(f"[PATCH-tools] 将重试 PATCH (retry={task.artifacts.prebuild_generate_retries})")
         task.current_state = TaskState.PATCH
         return task
 
     if next_state == TaskState.PLAN:
+        print("[PATCH-tools] 路由到 PLAN (跳组)")
         return _move_to_next_group_or_finish(task, outcome="failed")
 
+    print("[PATCH-tools] 路由到 DEBUG")
     task.current_state = TaskState.DEBUG
     return task

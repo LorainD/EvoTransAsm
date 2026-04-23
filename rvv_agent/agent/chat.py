@@ -1072,7 +1072,7 @@ def handle_test(task: TaskContext) -> TaskContext:
             task.run_dir / "checkasm_output_snapshot.txt",
             "=== stdout ===\n" + run_stdout + "\n\n=== stderr ===\n" + run_stderr + "\n",
         )
-        run_eval = analyze_checkasm_output(run_stdout, run_stderr, run_rc)
+        run_eval = analyze_checkasm_output(run_stdout, run_stderr, run_rc, expected_symbol=task.target.symbol)
         if not run_eval.success:
             timeout_hint = "（超时，已中断 ssh）" if run_eval.reason == "checkasm_timeout" else ""
             print(f"\n板端 checkasm 运行失败 {timeout_hint} (rc={res_run.returncode}, reason={run_eval.reason})")
