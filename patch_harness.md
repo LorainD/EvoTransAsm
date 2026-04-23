@@ -66,3 +66,7 @@ av_cold void ff_[module_name]_init_riscv([Module]Context *s)
 #endif
 }
 ```
+
+## 个性化经验
+- sw_开头的模块: c源代码位于libswscale库下，所在位置可以参考x86架构的.c函数中的#include 文件
+

@@ -1280,7 +1280,7 @@ def generate_code(task: TaskContext,
         LlmMessage(role="user", content=patch_generate_prompt(patch_ctx)),
     ]
     try:
-        raw = chat_completion_with_retry(task.cfg.llm, messages, max_tokens=2800, stage="patch_generate", max_retries=3)
+        raw = chat_completion_with_retry(task.cfg.llm, messages, max_tokens=4000, stage="patch_generate", max_retries=3)
         data = _normalize_generate_plan(_extract_gen_json(raw))
         record_trajectory_action(
             "patch_generate",
@@ -1678,9 +1678,11 @@ def run_patch_with_tools(task: TaskContext) -> PatchArtifact:
             content=(
                 "你现在处于 PATCH 阶段，可以通过 JSON 调用工具来完成迁移。\n"
                 "请遵循以下协议：\n\n"
-                "1. 如需调用工具，请严格输出：\n"
+                "1. 如需调用单个工具，请输出：\n"
                 "   {\"tool_call\": {\"name\": \"<tool_name>\", \"arguments\": { ... }}}\n"
-                "2. 完成全部修改后，请输出：\n"
+                "2. 如需在一轮中调用多个工具（按顺序执行），请输出：\n"
+                "   {\"tool_calls\": [{\"name\": \"<tool1>\", \"arguments\": { ... }}, {\"name\": \"<tool2>\", \"arguments\": { ... }}]}\n"
+                "3. 完成全部修改后，请输出：\n"
                 "   {\"final\": {\"generate_plan\": {\"patches\": [ ... ]}}}\n\n"
                 "## 可用工具\n"
                 f"{tool_list_text}\n\n"

@@ -60,8 +60,8 @@ class TrajectoryEvent:
             "cumulative_output_tokens": self.cumulative_output_tokens,
             "cumulative_cost_usd": round(self.cumulative_cost_usd, 8),
             "elapsed_seconds": round(self.elapsed_seconds, 3),
-            "prompt": self.prompt[:2000].splitlines(),
-            "response": self.response[:4000].splitlines(),
+            "prompt": self.prompt[:10000].splitlines(),
+            "response": self.response[:10000].splitlines(),
         }
 
 
@@ -626,13 +626,19 @@ class ToolCall:
     arguments: dict[str, Any]
 
 
-def _parse_tool_message(raw: str) -> tuple[str, ToolCall | None, Any | None]:
-    """Parse a model reply into either a tool call or a final result.
+def _parse_tool_message(raw: str) -> tuple[str, list[ToolCall], Any | None]:
+    """Parse a model reply into tool calls or a final result.
 
     约定的 JSON 结构（由上层 prompt 约束 LLM 输出）：
 
-    - 请求调用工具：
+    - 请求调用单个工具：
       {"tool_call": {"name": "search_files", "arguments": {"pattern": "..."}}}
+
+    - 请求调用多个工具（一轮内按顺序执行）：
+      {"tool_calls": [
+          {"name": "view_file", "arguments": {"path": "..."}},
+          {"name": "write_patch", "arguments": { ... }}
+      ]}
 
     - 返回最终结果：
       {"final": { ... 任意结果 ... }}
@@ -643,17 +649,35 @@ def _parse_tool_message(raw: str) -> tuple[str, ToolCall | None, Any | None]:
 
     raw = (raw or "").strip()
     if not raw:
-        return "final", None, None
+        return "final", [], None
 
     try:
         data = extract_json_from_llm(raw)
     except Exception:
         # 无法解析为 JSON 时，视为最终自然语言结果
-        return "final", None, raw
+        return "final", [], raw
 
     if not isinstance(data, dict):
-        return "final", None, data
+        return "final", [], data
 
+    # ---- 多 tool_call 支持 ----
+    calls: list[ToolCall] = []
+
+    # 1) tool_calls（复数）：数组形式
+    tcs = data.get("tool_calls")
+    if isinstance(tcs, list):
+        for tc in tcs:
+            if isinstance(tc, dict):
+                name = str(tc.get("name", "")).strip()
+                args = tc.get("arguments") or tc.get("args") or {}
+                if not isinstance(args, dict):
+                    args = {}
+                if name:
+                    calls.append(ToolCall(name=name, arguments=args))
+        if calls:
+            return "tool", calls, None
+
+    # 2) tool_call（单数）：向后兼容
     tc = data.get("tool_call")
     if isinstance(tc, dict):
         name = str(tc.get("name", "")).strip()
@@ -661,14 +685,14 @@ def _parse_tool_message(raw: str) -> tuple[str, ToolCall | None, Any | None]:
         if not isinstance(args, dict):
             args = {}
         if name:
-            return "tool", ToolCall(name=name, arguments=args), None
+            return "tool", [ToolCall(name=name, arguments=args)], None
 
     # 显式 final 包装
     if "final" in data:
-        return "final", None, data.get("final")
+        return "final", [], data.get("final")
 
     # 回退：把整个对象视为最终结果
-    return "final", None, data
+    return "final", [], data
 
 
 def run_tool_use_loop(
@@ -704,40 +728,41 @@ def run_tool_use_loop(
         )
         messages.append(LlmMessage(role="assistant", content=reply))
 
-        kind, call, result = _parse_tool_message(reply)
-        if kind == "tool" and call is not None:
-            spec = tool_map.get(call.name)
-            if spec is None:
-                err_msg = f"Unknown tool: {call.name}"
-                record_trajectory_action(stage, f"tool_error: {err_msg}", event_type="action")
-                # 反馈给模型，让其自行修正工具名或参数
-                messages.append(
-                    LlmMessage(
-                        role="user",
-                        content=f"TOOL_ERROR: {err_msg}",
-                    )
-                )
-                continue
+        kind, calls, result = _parse_tool_message(reply)
+        if kind == "tool" and calls:
+            # 一轮内按顺序执行所有 tool call，收集结果
+            results_payloads: list[str] = []
+            for call in calls:
+                spec = tool_map.get(call.name)
+                if spec is None:
+                    err_msg = f"Unknown tool: {call.name}"
+                    record_trajectory_action(stage, f"tool_error: {err_msg}", event_type="action")
+                    results_payloads.append(json.dumps(
+                        {"tool_name": call.name, "ok": False, "error": err_msg},
+                        ensure_ascii=False,
+                    ))
+                    continue
 
-            try:
-                tool_output = spec.func(call.arguments or {})
-                payload = json.dumps(
-                    {"tool_name": spec.name, "ok": True, "result": tool_output},
-                    ensure_ascii=False,
-                )
-            except Exception as e:  # noqa: BLE001
-                err_text = f"{type(e).__name__}: {e}"
-                payload = json.dumps(
-                    {"tool_name": spec.name, "ok": False, "error": err_text},
-                    ensure_ascii=False,
-                )
+                try:
+                    tool_output = spec.func(call.arguments or {})
+                    results_payloads.append(json.dumps(
+                        {"tool_name": spec.name, "ok": True, "result": tool_output},
+                        ensure_ascii=False,
+                    ))
+                except Exception as e:  # noqa: BLE001
+                    err_text = f"{type(e).__name__}: {e}"
+                    results_payloads.append(json.dumps(
+                        {"tool_name": spec.name, "ok": False, "error": err_text},
+                        ensure_ascii=False,
+                    ))
 
-            # 将工具执行结果作为新的 user 消息反馈给 LLM
+            # 将本轮所有工具执行结果作为一条 user 消息反馈给 LLM
+            if len(results_payloads) == 1:
+                feedback = f"TOOL_RESULT: {results_payloads[0]}"
+            else:
+                feedback = "TOOL_RESULTS: [" + ", ".join(results_payloads) + "]"
             messages.append(
-                LlmMessage(
-                    role="user",
-                    content=f"TOOL_RESULT: {payload}",
-                )
+                LlmMessage(role="user", content=feedback)
             )
             continue
 
