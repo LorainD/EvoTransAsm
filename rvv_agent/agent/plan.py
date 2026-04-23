@@ -255,6 +255,7 @@ def llm_plan(
     symbol: str,
     functions: list[DiscoveredFunction] | None = None,
     reference_files: list[str] | None = None,
+    kb_short_rules: list[str] | None = None,
 ) -> PlanArtifact:
     """调用 LLM 生成针对 symbol 的迁移计划，失败时回退到 fixed_plan。"""
     discovered = list(functions or [])
@@ -265,7 +266,7 @@ def llm_plan(
     prompt_functions = [asdict(f) for f in discovered]
     messages = [
         LlmMessage(role="system", content=system_prompt()),
-        LlmMessage(role="user", content=plan_prompt(symbol, prompt_functions, reference_files)),
+        LlmMessage(role="user", content=plan_prompt(symbol, prompt_functions, reference_files, kb_short_rules)),
     ]
 
     raw = ""

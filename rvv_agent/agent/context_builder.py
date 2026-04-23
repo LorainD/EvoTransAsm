@@ -50,6 +50,7 @@ class PlanPromptContext:
     reference_files: list[str] = field(default_factory=list)
     existing_rvv_files: list[str] = field(default_factory=list)
     has_existing_rvv: bool = False
+    kb_short_rules: list[str] = field(default_factory=list)
 
 
 class ContextBuilder:
@@ -155,7 +156,7 @@ class ContextBuilder:
             "function_analysis": scoped_map,
             "symbol": analysis.get("symbol", "") if isinstance(analysis, dict) else "",
         }
-#TODO：添加harness的内容和kb中的知识总结
+
     def build_plan_prompt_context(self) -> PlanPromptContext:
         """Build PLAN prompt context from SEARCH_FILE artifact.
 
@@ -163,13 +164,15 @@ class ContextBuilder:
         Existing RVV files are tagged with "[existing-rvv]" in reference_files
         for direct prompt consumption.
         """
+        kb_short_rules = self._build_plan_kb_short_rules(max_rules=3)
+
         try:
             search_art = self.task.load_artifact("SEARCH_FILE")
         except Exception:
-            return PlanPromptContext()
+            return PlanPromptContext(kb_short_rules=kb_short_rules)
 
         if not isinstance(search_art, dict):
-            return PlanPromptContext()
+            return PlanPromptContext(kb_short_rules=kb_short_rules)
 
         selected_json = search_art.get("selected_json", {})
         ordered_refs: list[str] = []
@@ -210,7 +213,62 @@ class ContextBuilder:
             reference_files=ordered_refs,
             existing_rvv_files=existing_rvv_files,
             has_existing_rvv=bool(existing_rvv_files),
+            kb_short_rules=kb_short_rules,
         )
+
+    def _build_plan_kb_short_rules(self, max_rules: int = 3) -> list[str]:
+        """Build concise engineering guardrails for PLAN stage.
+
+        PLAN 阶段仅注入短规则，避免长错误日志污染规划质量。
+        """
+        if not self.kb:
+            return []
+
+        try:
+            records = self.kb.search_errors(max_results=30)
+        except Exception:
+            return []
+
+        if not records:
+            return []
+
+        out: list[str] = []
+        seen: set[str] = set()
+
+        def _push(rule: str) -> None:
+            s = str(rule).strip()
+            if not s:
+                return
+            k = s.lower()
+            if k in seen:
+                return
+            seen.add(k)
+            out.append(s)
+
+        for rec in records:
+            text = f"{rec.pattern}\n{rec.fix_strategy}".lower()
+
+            if "already defined" in text or "重复定义" in text or "重复实现" in text:
+                _push("禁止重复定义宏/符号：新增实现前先核对同名函数与 include 链路是否唯一。")
+            if "av_cpu_flag_rvv" in text or "undeclared" in text or "未定义" in text:
+                _push("CPU feature 只能使用仓库现有 flag/检测路径，禁止硬写不存在的 RVV 标识。")
+            if "unrecognized opcode" in text or "function " in text or "endfunc" in text:
+                _push("汇编宏体系必须与当前仓库模板一致，避免跨版本宏（如 function/endfunc）直接搬运。")
+            if "#elif" in text and "#else" in text:
+                _push("条件编译链必须保持配对顺序，修改 ARCH/RVV 分支时优先在原有链内插入。")
+
+            # Generic concise fallback from fix_strategy first sentence.
+            if len(out) < max_rules:
+                fs = str(rec.fix_strategy or "").strip()
+                if fs:
+                    sentence = fs.split("。", 1)[0].split(";", 1)[0].strip()
+                    if sentence:
+                        _push(f"复盘要点：{sentence[:80]}")
+
+            if len(out) >= max_rules:
+                break
+
+        return out[:max_rules]
 
     def build_debug_context(
         self,

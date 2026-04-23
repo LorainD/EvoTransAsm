@@ -90,7 +90,14 @@ def patch_generate_prompt(
         kb_parts = []
         for er in kb_errors:
             kb_parts.append(
-                f"- [{er.get('error_class', '?')}] {er.get('pattern', '')[:80]} → 修复: {er.get('fix_strategy', '')}"
+                "\n".join(
+                    [
+                        f"- [{er.get('error_class', '?')}] {er.get('pattern', '')[:100]}",
+                        f"  根因: {er.get('root_cause', '')}",
+                        f"  死胡同: {er.get('dead_end', '')}",
+                        f"  修复方向: {er.get('fix_strategy', '')}",
+                    ]
+                )
             )
         kb_section = "\n## 历史错误经验（来自知识库，请避免重复这些错误）\n" + "\n".join(kb_parts) + "\n"
 

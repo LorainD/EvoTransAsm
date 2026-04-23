@@ -620,11 +620,14 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
         discovered_functions = [DiscoveredFunction(name=name, role="core") for name in fallback_names if name]
 
     reference_files_for_plan: list[str] = []
+    kb_short_rules_for_plan: list[str] = []
     try:
-        plan_ctx = ContextBuilder(task).build_plan_prompt_context()
+        plan_ctx = ContextBuilder(task, kb).build_plan_prompt_context()
         reference_files_for_plan = list(plan_ctx.reference_files)
+        kb_short_rules_for_plan = list(getattr(plan_ctx, "kb_short_rules", []) or [])
     except Exception:
         reference_files_for_plan = []
+        kb_short_rules_for_plan = []
 
     print("\n正在生成迁移计划…")
     try:
@@ -633,6 +636,7 @@ def handle_plan(task: TaskContext, kb: KnowledgeBase | None = None) -> TaskConte
             symbol,
             functions=discovered_functions,
             reference_files=reference_files_for_plan,
+            kb_short_rules=kb_short_rules_for_plan,
         )
     except Exception as e:
         print(f"[PLAN] 计划生成已取消: {e}")

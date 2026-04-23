@@ -39,6 +39,116 @@ from ..tool.interactive import prompt_yes_no
 from ..tool.exec import run_configure, run_make_checkasm, configure_argv, make_checkasm_argv
 
 
+def _extract_root_cause_and_dead_end(fix_strategy: str) -> tuple[str, str]:
+    """Derive concise root-cause and dead-end hints from fix_strategy text."""
+    text = str(fix_strategy or "").strip()
+    if not text:
+        return "先核对构建链路一致性（符号/宏/条件编译/注册）。", "不要盲目重生成并叠加补丁。"
+
+    root_cause = text.split("。", 1)[0].split(";", 1)[0].strip()
+    dead_end = ""
+    for sep in ["。", "；", ";", "\n"]:
+        for part in text.split(sep):
+            p = part.strip()
+            low = p.lower()
+            if any(k in low for k in ["不要", "死胡同", "avoid", "do not", "别"]):
+                dead_end = p
+                break
+        if dead_end:
+            break
+
+    if not root_cause:
+        root_cause = text[:100]
+    if not dead_end:
+        dead_end = "不要先改算术细节，先核对 Makefile/初始化注册/架构宏体系是否匹配。"
+
+    return root_cause[:120], dead_end[:120]
+
+
+def _select_patch_kb_errors(task: TaskContext, max_results: int = 5) -> list[dict] | None:
+    """Select medium-detail KB error lessons for PATCH generation.
+
+    Strategy:
+    1) current error semantic match with class filter
+    2) symbol/module keyword match
+    3) class-only fallback
+    """
+    try:
+        from ..memory.knowledge_base import KnowledgeBase
+        from .debug import classify_error
+
+        kb = KnowledgeBase()
+        kb.load()
+    except Exception:
+        return None
+
+    symbol = str(task.target.symbol or "").strip()
+    module = str(task.target.module or "").strip()
+    symbol_leaf = symbol.split(".")[-1] if symbol else ""
+
+    current_error = str(task.all_build_errors[-1] if task.all_build_errors else "").strip()
+    error_class = classify_error(current_error) if current_error else None
+
+    candidates: list = []
+    if current_error:
+        try:
+            sem = kb.search_errors_semantic(
+                current_error,
+                task.cfg,
+                error_class=error_class,
+                max_results=max(4, max_results),
+                min_score=0.55,
+            ) if task.cfg else kb.search_errors(error_class=error_class, max_results=max(4, max_results))
+            candidates.extend(sem)
+        except Exception:
+            pass
+
+    for kw in [symbol, symbol_leaf, module]:
+        if not kw:
+            continue
+        try:
+            candidates.extend(kb.search_errors(error_class=error_class, keyword=kw, max_results=max_results))
+        except Exception:
+            continue
+
+    if not candidates:
+        try:
+            candidates.extend(kb.search_errors(error_class=error_class, max_results=max_results))
+        except Exception:
+            pass
+
+    if not candidates:
+        return None
+
+    # Dedupe while preserving rough relevance order.
+    merged: list = []
+    seen: set[tuple[str, str]] = set()
+    for rec in candidates:
+        key = (str(rec.error_class), str(rec.pattern))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(rec)
+        if len(merged) >= max_results:
+            break
+
+    kb_error_dicts: list[dict] = []
+    for rec in merged[:max_results]:
+        root_cause, dead_end = _extract_root_cause_and_dead_end(str(rec.fix_strategy or ""))
+        kb_error_dicts.append(
+            {
+                "error_class": str(rec.error_class or "unknown"),
+                "pattern": str(rec.pattern or "")[:160],
+                "root_cause": root_cause,
+                "dead_end": dead_end,
+                "fix_strategy": str(rec.fix_strategy or "")[:280],
+                "count": int(getattr(rec, "count", 1) or 1),
+            }
+        )
+
+    return kb_error_dicts or None
+
+
 def _current_group_id(task: TaskContext) -> str:
     """Best-effort current group id from PLAN artifact."""
     try:
@@ -1385,20 +1495,7 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
     planning_bundle = _build_planning_bundle(task)
     record_trajectory_action("patch_plan", "planning_bundle_ready")
 
-    kb_error_dicts: list[dict] | None = None
-    if task.all_build_errors:
-        try:
-            from ..memory.knowledge_base import KnowledgeBase
-            from dataclasses import asdict as _asdict
-            kb = KnowledgeBase()
-            kb.load()
-            error_records = kb.search_errors(keyword=task.target.symbol, max_results=5)
-            if not error_records:
-                error_records = kb.search_errors(max_results=3)
-            if error_records:
-                kb_error_dicts = [_asdict(er) for er in error_records]
-        except Exception:
-            pass
+    kb_error_dicts: list[dict] | None = _select_patch_kb_errors(task, max_results=5)
 
     print("\n[PATCH] Step 1/2: 生成代码…（可能需要 20-60 秒）")
     gen_plan = generate_code(task, kb_errors=kb_error_dicts, planning_bundle=planning_bundle)

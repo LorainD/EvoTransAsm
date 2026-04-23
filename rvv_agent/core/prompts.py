@@ -428,6 +428,7 @@ def plan_prompt(
   symbol: str,
   functions: list[dict] | None = None,
   reference_files: list[str] | None = None,
+  kb_short_rules: list[str] | None = None,
 ) -> str:
     func_section = ""
     if functions:
@@ -447,8 +448,14 @@ def plan_prompt(
         if ref_lines:
             refs_section = "\n检索/选择出的参考文件：\n" + "\n".join(ref_lines) + "\n"
 
+    kb_rules_section = ""
+    if kb_short_rules:
+      lines = [f"- {str(x)}" for x in kb_short_rules if str(x).strip()]
+      if lines:
+        kb_rules_section = "\n知识库工程禁忌（短规则，仅用于规划防偏）：\n" + "\n".join(lines) + "\n"
+
     return f"""你是 FFmpeg RVV SIMD 迁移助手。请为迁移算子 {symbol} 生成一份具体、可执行的迁移计划。
-{func_section}{refs_section}
+  {func_section}{refs_section}{kb_rules_section}
 目标：根据函数发现结果，判断应当：
 - 一次迁移单函数，还是一次迁移多个函数；
 - 哪些函数存在依赖关系，应放入同一组或前后顺序约束；
