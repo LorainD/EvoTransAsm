@@ -658,28 +658,27 @@ def function_discovery_prompt(symbol: str, code_context: str) -> str:
 ## 任务
 分析下面的代码上下文，找出所有属于 {symbol} 算子且适合迁移到 RVV (RISC-V Vector) 的 C 函数。函数名应与{symbol}相关
 
+##函数来源文件
+1.重点观察libxx/.h文件中与 {symbol} 相关的函数定义和声明。
+2.重点观察libxx/架构目录下的.c文件中与 {symbol} 相关的函数定义和声明。重点迁移x86/ARM上已有向量化实现的函数
+
 ## 提取规则与约束（CRITICAL）
-1. 你的目标是提取需要被翻译为 RISC-V Vector (RVV) 的核心 C 语言标量函数。
-2. 严禁包含其他架构的 SIMD 实现：FFmpeg 源码中包含大量其他架构的汇编实现。如果函数名以`_init`, `_sse`, `_sse2`, `_avx`, `_avx2`, `_neon`, `_vfp`, `_altivec`, `_mmi` 等特定架构后缀结尾，绝对不要将它们列为迁移目标。
-3. 纯量函数识别：优先提取没有上述后缀的通用 C 函数，或以 `_c` 结尾的函数。
+1. 你提取的一定是实际存在的函数名
+2. 你的目标是提取需要被翻译为 RISC-V Vector (RVV) 的核心 C 语言标量函数。
+3. 纯量函数后缀识别：可以提取以 `_c` 结尾的函数，不提取以`_init`, `_sse`, `_sse2`, `_avx`, `_avx2`, `_neon`, `_vfp`, `_altivec`, `_mmi` 等特定架构后缀结尾的通用 C 函数。
+4. 提取的函数一定包含 {symbol} 部分字段，但不要求完全匹配，如{symbol}末尾_num 可能是该函数的num bit实现
+5.函数必须包含可向量化的计算（循环中的数组操作、SIMD 风格运算等）
 
 你不仅要识别函数名，还要判断：
 - 该函数是否是核心计算函数（core）还是依赖/辅助函数（dependency）
 - 它依赖哪些同模块函数
 - 它的迁移难度是容易还是困难
 - 是否适合和其它函数一起批量迁移
-
-判定规则：
-- 重点迁移x86/ARM上已有向量化实现的函数
-- 函数必须包含可向量化的计算（循环中的数组操作、SIMD 风格运算等）
-- 如果函数名以 `_sse`, `_sse2`, `_avx`, `_avx2`, `_neon`, `_vfp`, `_altivec`, `_mmi` 结尾，必须直接排除
-- init / alloc / free / 注册 / 纯胶水函数通常不要作为核心迁移目标；不具备迁移价值。
-- 排除已有 RVV 实现的函数
-- 如果某函数只是给核心函数做简单包装/拆分/共享 helper，也可以保留，但 role 要标成 dependency
 - 如果多个函数语义相近、可共享向量化模板，请在 semantic_hint 中说明 similar
 - 如果函数依赖另一个函数才能完整落地，请把被依赖函数放到 dependencies
 - 如果函数明显更复杂，请在 semantic_hint 中说明 hard/complex
 - 不要有重复的函数，同名函数请去重
+
 
 对每个发现的函数，输出：
 - name: 函数名（如 ff_sbr_neg_odd_64）

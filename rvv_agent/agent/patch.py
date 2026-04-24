@@ -174,6 +174,8 @@ _snapshot = snapshot_file
 # Keep PATCH self-healing bounded when BUILD has not started yet.
 _MAX_PREBUILD_PATCH_RETRIES = 3
 _PATCH_HARNESS_CACHE: str | None = None
+_ALLOWED_LIB_ROOTS = ("libavcodec", "libavfilter", "libswscale")
+_INFER_LIB_ROOT_LLM_CFG = None
 
 
 def _load_patch_harness_text() -> str:
@@ -573,7 +575,6 @@ def _build_group_scoped_analysis(task: TaskContext) -> dict:
     return {}
 
 
-
 def _check_has_rvv_block(path: Path) -> bool:
     """Check whether file has #if HAVE_RVV or #if CONFIG_RVV block."""
     if not path.exists():
@@ -645,8 +646,8 @@ def lookup_config_tag(ffmpeg_root: Path, module: str, lib_root: str) -> str | No
     return None
 
 
-def _infer_lib_root(module: str, selected_files: list[str], existing_rvv: list[str]) -> str:
-    """Infer target lib root (libavcodec/libswscale/...) from selected references."""
+def _infer_lib_root_rule_based(module: str, selected_files: list[str], existing_rvv: list[str]) -> str:
+    """Rule-based fallback for lib root inference (restricted to allowed roots)."""
     mod = (module or "").lower()
     candidates = [str(p or "") for p in (existing_rvv or [])] + [str(p or "") for p in (selected_files or [])]
 
@@ -655,7 +656,7 @@ def _infer_lib_root(module: str, selected_files: list[str], existing_rvv: list[s
         parts = p.split("/")
         if len(parts) < 3:
             continue
-        if not parts[0].startswith("lib"):
+        if parts[0] not in _ALLOWED_LIB_ROOTS:
             continue
         if parts[1] != "riscv":
             continue
@@ -665,10 +666,66 @@ def _infer_lib_root(module: str, selected_files: list[str], existing_rvv: list[s
     for rel in candidates:
         p = rel.replace("\\", "/")
         parts = p.split("/")
-        if len(parts) >= 3 and parts[0].startswith("lib") and parts[1] == "riscv":
+        if len(parts) >= 3 and parts[0] in _ALLOWED_LIB_ROOTS and parts[1] == "riscv":
             return parts[0]
 
     return "libavcodec"
+
+
+def _infer_lib_root(module: str, selected_files: list[str], existing_rvv: list[str]) -> str:
+    """Infer lib root via LLM first; fallback to deterministic rules.
+
+    Returns only one of: libavcodec/libavfilter/libswscale.
+    """
+    fallback = _infer_lib_root_rule_based(module, selected_files, existing_rvv)
+    llm_cfg = _INFER_LIB_ROOT_LLM_CFG
+    if llm_cfg is None:
+        return fallback
+
+    mod = str(module or "").strip()
+    candidates = [str(p or "") for p in (existing_rvv or [])] + [str(p or "") for p in (selected_files or [])]
+    candidates = candidates[:200]
+
+    prompt = (
+        "你需要从候选路径中推断目标 FFmpeg lib_root。\n"
+        "只允许返回以下三者之一：libavcodec, libavfilter, libswscale。\n"
+        "输出必须是 JSON：{\"lib_root\":\"...\",\"reason\":\"...\"}\n"
+        "参考经验：libxx/{module}相关的.c/.h文件 的置信度更高\n"
+        f"module: {mod}\n"
+        "candidates:\n- " + "\n- ".join(candidates if candidates else ["<empty>"])
+    )
+
+    messages = [
+        LlmMessage(role="system", content="You are a strict classifier."),
+        LlmMessage(role="user", content=prompt),
+    ]
+
+    try:
+        raw = chat_completion_with_retry(
+            llm_cfg,
+            messages,
+            max_tokens=200,
+            stage="infer_lib_root",
+            max_retries=2,
+        )
+        data = _extract_gen_json(raw)
+        if isinstance(data, dict):
+            root = str(data.get("lib_root", "")).strip().lower()
+            if root in _ALLOWED_LIB_ROOTS:
+                return root
+
+        low = str(raw).lower()
+        for opt in _ALLOWED_LIB_ROOTS:
+            if re.search(rf"\\b{opt}\\b", low):
+                return opt
+    except Exception as e:  # noqa: BLE001
+        record_trajectory_action(
+            "infer_lib_root",
+            f"llm_infer_failed:{type(e).__name__}",
+            str(e)[:200],
+        )
+
+    return fallback
 
 
 def _check_source_has_riscv_decl(ffmpeg_root: Path, module: str, lib_root: str) -> bool:
@@ -720,6 +777,8 @@ def _build_planning_bundle(task: TaskContext) -> dict:
                 combined_context_parts.append(f"=== {key} ===\n{code}")
                 break
 
+    global _INFER_LIB_ROOT_LLM_CFG
+    _INFER_LIB_ROOT_LLM_CFG = task.cfg.llm if (task.cfg and task.cfg.llm) else None
     lib_root = _infer_lib_root(task.target.module, selected_files, existing_rvv)
 
     module = task.target.module
@@ -1231,7 +1290,7 @@ def generate_code(task: TaskContext,
 
     # Collect retry context from previous DEBUG cycles
     build_errors_text: str | None = None
-    debug_suggestions: list[str] | None = None
+    debug_suggestions: list[str] = []
     previous_code: dict | None = None
 #TODO：如果generate和debug是耦合的，那么是否加入了知识库中的错误经验？
     if task.all_build_errors:
@@ -1242,12 +1301,25 @@ def generate_code(task: TaskContext,
             latest_debug = task.load_artifact(
                 "DEBUG", sub_id=task.artifacts.debug_run_ids[-1]
             )
-            debug_suggestions = latest_debug.get("fix_actions", [])
-            llm_sug = latest_debug.get("llm_suggestion", "")
+            fix_actions_raw: list[str] = []
+            llm_sug = ""
+
+            if isinstance(latest_debug, dict):
+                maybe_actions = latest_debug.get("fix_actions", [])
+                if isinstance(maybe_actions, list):
+                    fix_actions_raw = [str(x).strip() for x in maybe_actions if str(x).strip()]
+                llm_sug = str(latest_debug.get("llm_suggestion", "") or "").strip()
+            else:
+                maybe_actions = getattr(latest_debug, "fix_actions", [])
+                if isinstance(maybe_actions, list):
+                    fix_actions_raw = [str(x).strip() for x in maybe_actions if str(x).strip()]
+                llm_sug = str(getattr(latest_debug, "llm_suggestion", "") or "").strip()
+
+            debug_suggestions = fix_actions_raw
             if llm_sug:
-                debug_suggestions = (debug_suggestions or []) + [llm_sug]
+                debug_suggestions.append(llm_sug)
         except Exception:
-            pass
+            debug_suggestions = []
 
     if task.artifacts.patch_ids:
         try:
@@ -1641,9 +1713,32 @@ def run_patch_with_tools(task: TaskContext) -> PatchArtifact:
     planning_bundle = _build_planning_bundle(task)
     analysis_json = planning_bundle.get("analysis_json", {})
     repository_knowledge_entry = _load_repository_knowledge_entry(task)
-
+    debug_suggestions: list[str] = []
     from .context_builder import ContextBuilder, PatchContext
+    if task.artifacts.debug_run_ids:
+        try:
+            latest_debug = task.load_artifact(
+                "DEBUG", sub_id=task.artifacts.debug_run_ids[-1]
+            )
+            fix_actions_raw: list[str] = []
+            llm_sug = ""
 
+            if isinstance(latest_debug, dict):
+                maybe_actions = latest_debug.get("fix_actions", [])
+                if isinstance(maybe_actions, list):
+                    fix_actions_raw = [str(x).strip() for x in maybe_actions if str(x).strip()]
+                llm_sug = str(latest_debug.get("llm_suggestion", "") or "").strip()
+            else:
+                maybe_actions = getattr(latest_debug, "fix_actions", [])
+                if isinstance(maybe_actions, list):
+                    fix_actions_raw = [str(x).strip() for x in maybe_actions if str(x).strip()]
+                llm_sug = str(getattr(latest_debug, "llm_suggestion", "") or "").strip()
+
+            debug_suggestions = fix_actions_raw
+            if llm_sug:
+                debug_suggestions.append(llm_sug)
+        except Exception:
+            debug_suggestions = []
     ctx_builder = ContextBuilder(task, kb=None)
     patch_ctx = PatchContext(
         symbol=task.target.symbol,
@@ -1652,7 +1747,7 @@ def run_patch_with_tools(task: TaskContext) -> PatchArtifact:
         repository_knowledge_entry=repository_knowledge_entry,
         existing_files_map=None,
         build_errors=None,
-        debug_suggestions=None,
+        debug_suggestions=debug_suggestions,
         previous_code=None,
         kb_errors=None,
         validation_feedback=None,

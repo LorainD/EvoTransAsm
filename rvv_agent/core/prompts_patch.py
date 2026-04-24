@@ -82,7 +82,7 @@ def patch_generate_prompt(
     if existing_files_map:
         parts = []
         for path, content in existing_files_map.items():
-            parts.append(f"### {path}\n```\n{content[:3000]}\n```")
+            parts.append(f"### {path}\n```\n{content[:10000]}\n```")
         existing_section = "\n## 现有文件内容（需要做增量合并）\n" + "\n".join(parts)
 
     kb_section = ""
@@ -119,6 +119,9 @@ def patch_generate_prompt(
                 fix_section += "\n## 上次生成的代码（有错误，需要修正）\n" + "\n".join(prev_parts) + "\n"
         fix_section += "\n请根据以上错误信息修正代码\n"
 
+    if (not build_errors) and debug_suggestions:
+        fix_section += "\n## 诊断建议（来自最近 DEBUG artifact）\n" + "\n".join(f"- {s}" for s in debug_suggestions) + "\n"
+
     validation_section = ""
     if validation_feedback:
         validation_section = (
@@ -139,12 +142,14 @@ def patch_generate_prompt(
 
 目标算子: {symbol}
 
-## 语义分析（当前分组）
-{json.dumps(analysis_json, ensure_ascii=False, indent=2)}
+{fix_section}{validation_section}
 
 ## 注入目标状态（工具扫描结果，确定性）
 {json.dumps(target_files, ensure_ascii=False, indent=2)}
-{repo_section}{existing_section}{kb_section}{fix_section}{validation_section}
+{repo_section}{existing_section}{kb_section}
+
+## 语义分析（当前分组）
+{json.dumps(analysis_json, ensure_ascii=False, indent=2)}
 
 ## 合法 action 类型
 - create  : 新建文件（完整内容）
@@ -216,6 +221,10 @@ def debug_classify_prompt(
 3. 确定回滚目标 rollback_target:
     - "generate": 唯一合法值。即便根因是锚点/构建系统问题，也请在 fix_actions 中描述，回滚目标仍输出 generate。
 4. 给出具体修复建议（fix_actions）和一个简短的建议总结（suggestion）
+
+##经验
+1. 如果你遇到类似错误：“ no previous prototype for 'ff_xxx_init_riscv'”
+该错误说明没有在源c文件下添加该init入口，需要添加调度层绑定，可以通过查看其他架构的init.c文件的#include找到源架构层位置
 
 严格输出 JSON:
 {{"error_class": "...", "error_note": "...", "rollback_target": "...", "fix_actions": ["..."], "suggestion": "..."}}"""

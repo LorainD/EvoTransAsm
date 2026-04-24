@@ -37,6 +37,16 @@ class CheckasmLlmAnalysis:
     raw: str
 
 
+_REMOTE_WORK_DIR_SEQ = 0
+
+
+def _next_remote_work_dir(base_remote_dir: str) -> str:
+    """Build a unique per-session remote dir name as <timestamp>_<num>."""
+    global _REMOTE_WORK_DIR_SEQ
+    _REMOTE_WORK_DIR_SEQ += 1
+    return f"{base_remote_dir}/{now_id()}_{_REMOTE_WORK_DIR_SEQ}"
+
+
 def local_checkasm_candidates(ffmpeg_root: Path, build_dir_name: str) -> list[Path]:
     return [
         ffmpeg_root / "tests" / "checkasm" / "riscv" / "checkasm",
@@ -172,7 +182,7 @@ def build_board_commands(
     ssh_target = f"{cfg.board.user}@{cfg.board.host}"
 
     base_remote_dir = cfg.board.remote_dir.strip().rstrip("/") or "workplace"
-    remote_work_dir = f"{base_remote_dir}/{now_id()}"
+    remote_work_dir = _next_remote_work_dir(base_remote_dir)
     remote_work_dir_quoted = shlex.quote(remote_work_dir)
     remote = f"{cfg.board.user}@{cfg.board.host}:{remote_work_dir}/checkasm"
 
