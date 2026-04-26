@@ -53,38 +53,11 @@ endfunc
 #include "libavutil/riscv/asm.S"
 ```
 
-## riscv/xxx_init.c示例
-
-```
-#include "config.h"
-#include "libavutil/attributes.h"
-#include "libavutil/cpu.h"
-#include "libavcodec/xxx.h" // 引入c源代码所在头文件
-
-// [核心规则 1] 汇编函数本地声明区：
-// 所有带有 _rvv / _rvi 后缀的汇编函数，必须且只能在此处声明！绝对禁止写入通用 .h 文件！
-void ff_[func_name]_rvv(...);
-
-// [核心规则 2] 架构入口定义：与通用 .h文件下一致
-av_cold void ff_[module_name]_init_riscv([Module]Context *s)
-{
-// [核心规则 3] 编译时宏隔离
-#if HAVE_RVV 
-    int flags = av_get_cpu_flags();
-
-    // [核心规则 4] 运行时标志位检查 (按汇编需求使用 RVV_I32, RVV_F32, RVB 等)
-    if (flags & AV_CPU_FLAG_RVV_F32) { 
-        // [核心规则 5] 函数指针绑定
-        s->[target_func_ptr] = ff_[func_name]_rvv; 
-    }
-#endif
-}
-```
 
 # 个性化经验
 - sw_开头的模块: c源代码位于libswscale库下，源代码所在位置可以参考x86架构的{symbol}.c函数中的#include 文件
-
-
+- 强约束：如果没有新建文件，一定只修改.S和用于声明rvv的.c文件（都是existing-rvv）
+- 强约束：如果新建文件，一定需要添加绑定，参考其他架构的经验链接到c源实现的部分，进行架构分发函数的链接
 
 # 报错修复指导
 

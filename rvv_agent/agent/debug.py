@@ -11,6 +11,7 @@ are preserved at the bottom for backward compatibility with pipeline.py.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -73,6 +74,21 @@ def determine_rollback(
     """
     _ = (error_kind, error_text, cfg)
     return RollbackTarget.GENERATE
+
+LINKAGE_ERROR_PATTERNS = [
+    r"undefined reference to .*ff_.*_rvv",
+    r"undefined reference to .*ff_.*_init_riscv",
+    r"conflicting types for .*ff_.*_init_riscv",
+    r"assignment to .* from incompatible pointer type",
+    r"implicit declaration of function .*ff_.*_init",
+    r"no previous prototype for .*ff_.*_init_riscv",
+]
+
+
+def is_linkage_error(log: str) -> bool:
+    text = str(log or "")
+    return any(re.search(p, text, re.I) for p in LINKAGE_ERROR_PATTERNS)
+
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +162,7 @@ def _llm_classify(
 # ---------------------------------------------------------------------------
 
 _MAX_DEBUG_CYCLES = 3
-_MAX_GROUP_ITERATIONS = 5
+_MAX_GROUP_ITERATIONS = 10
 _MAX_PREBUILD_PATCH_RETRIES = 5
 
 
@@ -299,6 +315,9 @@ def run_debug_handler(task: TaskContext, kb: KnowledgeBase | None = None) -> Tas
         )
         error_text = (error_text + rvv_missing_hint).strip()
         print("[DEBUG] Detected rvv_missing semantic failure, forcing PATCH retry")
+
+    if is_linkage_error(error_text):
+        print("[DEBUG] 检测到 linkage 类错误，将在下一轮 PATCH 前重建 linkage_plan。")
 
     if not error_text.strip():
         print("[DEBUG] No errors found in build output, moving to KB_UPDATE")

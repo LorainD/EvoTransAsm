@@ -27,6 +27,8 @@ from ..core.prompts_patch import (
     debug_classify_prompt,
     patch_generate_prompt,
 )
+from ..core.linkage_guard import validate_linkage_after_patch, validate_patch_scope
+from ..core.linkage_plan import run_linkage_plan
 from ..core.task import (
     PatchArtifact,
     TaskContext,
@@ -469,6 +471,20 @@ def _build_patch_tools(task: TaskContext) -> list[ToolSpec]:
             "description": str(args.get("description", "")),
         }
         plan = {"generate_plan": {"patches": [raw_item]}, "generated": [raw_item]}
+
+        linkage_plan = getattr(task.artifacts, "active_linkage_plan", None)
+        if not isinstance(linkage_plan, dict):
+            try:
+                linkage_plan = task.load_artifact("LINKAGE_PLAN")
+            except Exception:
+                linkage_plan = {}
+
+        scope_errors = validate_patch_scope([raw_item], linkage_plan if isinstance(linkage_plan, dict) else {})
+        if scope_errors:
+            err = "linkage_scope_failed: " + "; ".join(scope_errors)
+            record_trajectory_action("tool_call", f"write_patch_scope_blocked: {target_path}; {err}")
+            return {"ok": False, "error": err}
+
         artifact = apply_patch(task, plan)
         if artifact.success:
             print(f"  [tool] write_patch: {action} {target_path} -> ok")
@@ -812,6 +828,58 @@ def _build_planning_bundle(task: TaskContext) -> dict:
             "source_has_riscv_decl": _check_source_has_riscv_decl(task.ffmpeg_root, module, lib_root),
         },
     }
+
+
+def _is_ffmpeg_rvv_task(task: TaskContext) -> bool:
+    module = str(task.target.module or "").strip()
+    symbol = str(task.target.symbol or "").strip()
+    return bool(module and symbol)
+
+
+def _build_linkage_plan(task: TaskContext, planning_bundle: dict) -> dict:
+    if not task.cfg or not _is_ffmpeg_rvv_task(task):
+        return {}
+
+    latest_build_errors = str(task.all_build_errors[-1] if task.all_build_errors else "")
+    try:
+        plan = run_linkage_plan(
+            llm=task.cfg.llm,
+            ffmpeg_root=task.ffmpeg_root,
+            module=str(planning_bundle.get("module", task.target.module) or task.target.module),
+            symbol=str(planning_bundle.get("symbol", task.target.symbol) or task.target.symbol),
+            build_errors=latest_build_errors[:8000],
+        )
+        if isinstance(plan, dict) and plan:
+            task.save_artifact("LINKAGE_PLAN", plan)
+            record_trajectory_action("linkage_plan", "linkage_plan_generated")
+            return plan
+    except Exception as e:
+        record_trajectory_action("linkage_plan", f"linkage_plan_failed:{type(e).__name__}", str(e)[:240])
+
+    return {}
+
+
+def ensure_linkage_plan(task: TaskContext, planning_bundle: dict) -> dict:
+    plan = planning_bundle.get("linkage_plan") if isinstance(planning_bundle, dict) else None
+    if isinstance(plan, dict) and plan:
+        setattr(task.artifacts, "active_linkage_plan", plan)
+        return plan
+
+    try:
+        loaded = task.load_artifact("LINKAGE_PLAN")
+        if isinstance(loaded, dict) and loaded:
+            setattr(task.artifacts, "active_linkage_plan", loaded)
+            return loaded
+    except Exception:
+        pass
+
+    built = _build_linkage_plan(task, planning_bundle)
+    if isinstance(built, dict) and built:
+        setattr(task.artifacts, "active_linkage_plan", built)
+        return built
+
+    setattr(task.artifacts, "active_linkage_plan", {})
+    return {}
 
 
 def _load_repository_knowledge_entry(task: TaskContext) -> dict | None:
@@ -1259,6 +1327,7 @@ def generate_code(task: TaskContext,
     selected_files = bundle.get("selected_files", [])
     existing_rvv = bundle.get("existing_rvv", [])
     repository_knowledge_entry = _load_repository_knowledge_entry(task)
+    linkage_plan = bundle.get("linkage_plan", {}) if isinstance(bundle, dict) else {}
 
     # Build existing_files_map for incremental merge
     # Include .S files so LLM can see existing RVV implementations
@@ -1344,6 +1413,7 @@ def generate_code(task: TaskContext,
         previous_code=previous_code,
         kb_errors=kb_errors,
         validation_feedback=validation_feedback,
+        linkage_plan=linkage_plan if isinstance(linkage_plan, dict) else None,
     )
 
     messages = [
@@ -1579,6 +1649,9 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
         _rollback_previous_apply(task)
 
     planning_bundle = _build_planning_bundle(task)
+    linkage_plan = _build_linkage_plan(task, planning_bundle)
+    if linkage_plan:
+        planning_bundle["linkage_plan"] = linkage_plan
     record_trajectory_action("patch_plan", "planning_bundle_ready")
 
     kb_error_dicts: list[dict] | None = _select_patch_kb_errors(task, max_results=5)
@@ -1628,6 +1701,13 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
     for item in _generated_items(gen_plan):
         print(f"  → {item.get('target_path')} ({item.get('action')})")
 
+    if linkage_plan:
+        scope_errors = validate_patch_scope(_generated_items(gen_plan), linkage_plan)
+        if scope_errors:
+            ok_generate = False
+            generate_issues = list(generate_issues) + [f"linkage_scope_failed: {x}" for x in scope_errors]
+            record_trajectory_action("patch_validate", f"linkage_scope_failed={scope_errors}")
+
     if not ok_generate:
         print(f"[PATCH] 生成闭环校验仍失败，回到 PATCH(generate): {generate_issues}")
         artifact = PatchArtifact(
@@ -1661,6 +1741,13 @@ def run_patch_stage(task: TaskContext, kb_patterns: list[dict] | None = None) ->
 
     print("\n[PATCH] Step 2/2: 应用到工作区…")
     artifact = apply_patch(task, gen_plan)
+    #暂时注释掉链接守卫，等补丁应用稳定后再打开，避免过早引入额外失败因素
+    # if artifact.success and linkage_plan:
+    #     guard_errors = validate_linkage_after_patch(task.ffmpeg_root, linkage_plan)
+    #     if guard_errors:
+    #         artifact.success = False
+    #         artifact.error = "linkage_guard_failed: " + "; ".join(guard_errors)
+    #         record_trajectory_action("patch_validate", f"linkage_guard_failed={guard_errors}")
 
     aid = task.save_artifact("PATCH", artifact, sub_id=task.target.symbol)
     task.artifacts.patch_ids.append(aid)
@@ -1711,6 +1798,8 @@ def run_patch_with_tools(task: TaskContext) -> PatchArtifact:
     """
 
     planning_bundle = _build_planning_bundle(task)
+    linkage_plan = ensure_linkage_plan(task, planning_bundle)
+    planning_bundle["linkage_plan"] = linkage_plan
     analysis_json = planning_bundle.get("analysis_json", {})
     repository_knowledge_entry = _load_repository_knowledge_entry(task)
     debug_suggestions: list[str] = []
@@ -1751,6 +1840,7 @@ def run_patch_with_tools(task: TaskContext) -> PatchArtifact:
         previous_code=None,
         kb_errors=None,
         validation_feedback=None,
+        linkage_plan=linkage_plan if isinstance(linkage_plan, dict) else None,
     )
 
     tools = _build_patch_tools(task)
@@ -1788,7 +1878,13 @@ def run_patch_with_tools(task: TaskContext) -> PatchArtifact:
                 "view_file 可以查看 ffmpeg_root 下的任意文件。语义分析和注入目标中列出的 arm/aarch64/x86 参考文件路径都可以直接用 view_file 查看。\n"
                 "当你遇到实现困难或需要修复 debug 反馈的错误时，建议先用 view_file 查看同算子的其他架构实现（如 arm/aarch64 的 .S 文件），\n"
                 "参考其函数签名、寄存器用法和算法逻辑来优化你的 RVV 实现。\n\n"
-                "下面是当前 PATCH 上下文：\n\n" + patch_generate_prompt(patch_ctx)
+                "\n\n## FFmpeg linkage_plan\n"
+                + json.dumps(linkage_plan, ensure_ascii=False, indent=2)
+                + "\n\n"
+                + "链接可以参考 linkage_plan：\n"
+                + "1. 不得发明 init_signature。\n"
+                + "2. init.c 引用的 rvv_symbol 必须由 riscv_asm_file 导出。\n"
+                + "下面是当前 PATCH 上下文：\n\n" + patch_generate_prompt(patch_ctx)
             ),
         ),
     ]
@@ -1837,6 +1933,14 @@ def run_patch_with_tools(task: TaskContext) -> PatchArtifact:
     record_trajectory_action("patch_validate", f"tools_generate_ok={ok_generate}; issues={generate_issues}")
 
     artifact = apply_patch(task, gen_plan)
+
+    # 暂时注释
+    # if artifact.success:
+    #     link_errors = validate_linkage_after_patch(task.ffmpeg_root, linkage_plan if isinstance(linkage_plan, dict) else {})
+    #     if link_errors:
+    #         artifact.success = False
+    #         artifact.error = "linkage_guard_failed: " + "; ".join(link_errors)
+
     aid = task.save_artifact("PATCH", artifact, sub_id=task.target.symbol)
     task.artifacts.patch_ids.append(aid)
     return artifact

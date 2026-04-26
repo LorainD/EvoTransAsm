@@ -10,10 +10,11 @@
 #
 # api_key_env: 存放 API Key 的环境变量名（不要直接写 Key）
 [llm]
-# base_url    = "https://chatbox.isrc.ac.cn/api/chat/completions"
-base_url    = "https://aigc.x-see.cn/v1/chat/completions"
-model       = "gpt-5.4"
+base_url    = "https://chatbox.isrc.ac.cn/api/chat/completions"
+# base_url    = "https://aigc.x-see.cn/v1/chat/completions"
+# model       = "gpt-5.4"
 # model       = "Qwen3.5-397B-A17B"
+model       ="GLM-5.1"
 api_key_env = "LLM_API_KEY"
 temperature = 1
 default_max_tokens = 4096
@@ -23,13 +24,13 @@ intent = 1024
 retrieve_alias = 1024
 retrieve = 2048
 repo_analyze_note = 2048
-func_discover = 2048
+func_discover = 4096
 analyze = 8192
 plan = 4096
-patch_apply_route = 4096
-patch_generate = 8192
-patch_tools = 8192
-debug = 4096
+patch_apply_route = 12000
+patch_generate = 12000
+patch_tools = 12000
+debug = 10000
 chat = 2048
 
 [toolchain]

@@ -33,6 +33,7 @@ class PatchContext:
     previous_code: dict | None = None
     kb_errors: list[dict] | None = None
     validation_feedback: list[str] | None = None
+    linkage_plan: dict | None = None
 
 
 @dataclass

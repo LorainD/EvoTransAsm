@@ -26,6 +26,7 @@ def patch_generate_prompt(
     previous_code: dict | None = None,
     kb_errors: list[dict] | None = None,
     validation_feedback: list[str] | None = None,
+    linkage_plan: dict | None = None,
 ) -> str:
     """Prompt for PATCH generation.
 
@@ -51,6 +52,7 @@ def patch_generate_prompt(
             "previous_code": previous_code,
             "kb_errors": kb_errors,
             "validation_feedback": validation_feedback,
+            "linkage_plan": linkage_plan,
         }
     else:
         # New API: context is PatchContext dataclass
@@ -65,6 +67,7 @@ def patch_generate_prompt(
             "previous_code": context.previous_code,
             "kb_errors": context.kb_errors,
             "validation_feedback": context.validation_feedback,
+            "linkage_plan": context.linkage_plan,
         }
 
     symbol = ctx_dict["symbol"]
@@ -77,6 +80,7 @@ def patch_generate_prompt(
     previous_code = ctx_dict["previous_code"]
     kb_errors = ctx_dict["kb_errors"]
     validation_feedback = ctx_dict["validation_feedback"]
+    linkage_plan = ctx_dict["linkage_plan"]
 
     existing_section = ""
     if existing_files_map:
@@ -138,11 +142,30 @@ def patch_generate_prompt(
             + "\n"
         )
 
+
+    linkage_section = ""
+    if isinstance(linkage_plan, dict) and linkage_plan:
+        linkage_json = json.dumps(linkage_plan, ensure_ascii=False, indent=2)
+        linkage_section = (
+            "\n## FFmpeg linkage plan\n"
+            "You must follow this linkage_plan exactly:\n\n"
+            "```json\n"
+            + linkage_json[:4000]
+            + "\n```\n\n"
+            "Rules:\n"
+            "1. Only modify files in allowed_files.\n"
+            "2. Do not invent init_function or init_signature.\n"
+            "3. If you reference rvv_symbol in init file, it must be exported in riscv_impl_file.\n"
+            "4. rvv_symbol prototype must match rvv_signature exactly.\n"
+            "5. required_objects must appear in riscv_makefile.\n"
+            "6. If confidence is low or blocked_reason is non-empty, do not modify init or Makefile. Only generate leaf RVV code if possible.\n"
+        )
+
     return f"""你是 FFmpeg RVV 迁移专家。请生成可直接注入的完整变更单元。
 
 目标算子: {symbol}
 
-{fix_section}{validation_section}
+{fix_section}{validation_section}{linkage_section}
 
 ## 注入目标状态（工具扫描结果，确定性）
 {json.dumps(target_files, ensure_ascii=False, indent=2)}
@@ -224,8 +247,8 @@ def debug_classify_prompt(
 
 ##经验
 1. 如果你遇到类似错误：“ no previous prototype for 'ff_xxx_init_riscv'”
-该错误说明没有在源c文件下添加该init入口，需要添加调度层绑定，可以通过查看其他架构的init.c文件的#include找到源架构层位置
-
+该错误说明没有在源c文件下添加该init入口，需要添加调度层绑定，可以通过查看其他架构的init.c文件的#include找到源架构层位置。
+2.遇到链接错误可以提醒大模型调用view查看其他架构（arm和x86）的实现，参考函数声明和链接方式。
 严格输出 JSON:
 {{"error_class": "...", "error_note": "...", "rollback_target": "...", "fix_actions": ["..."], "suggestion": "..."}}"""
 
